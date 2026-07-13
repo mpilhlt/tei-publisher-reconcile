@@ -1,4 +1,10 @@
 tei-publisher-app
 tei-publisher-components
 tei-publisher-lib
+tei-publisher-jinks
+tei-publisher-jinks-cli
+tei-publisher-jinks-templates
+tei-publisher-roaster
+reconc-specs
+reconc-testbench
 .opencode
