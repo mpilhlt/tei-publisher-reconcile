@@ -1,0 +1,85 @@
+=== Console errors ===
+(none)
+
+=== Match tab ===
+Conditions:
+ADD PROPERTY
+Type:
+Work
+work
+Organization
+organization
+Place
+place
+Person
+person
+Custom:
+0 selections
+Reconcile against no particular type
+Limit:
+User interface language:
+Reconcile
+▶
+queries:
+▶
+0:
+▶
+conditions:
+▶
+0:
+matchType:"name"
+propertyValue:"Goethe"
+
+View query results on the service
+Goethe, Johann Wolfgang von (1749-1832)
+
+26.666666666666668
+ID
+kbga-actors-136
+Types
+Person
+
+Johann Wolfgang Goethe, Iphigenie auf Tauris
+
+24
+ID
+gnd-1273395107
+Types
+Work
+
+=== Suggest tab ===
+Entity:
+2 results. Use up and down arrow keys to navigate.
+kbga-actors-136
+Goethe, Johann Wolfgang von (1749-1832)
+
+gnd-1273395107
+Johann Wolfgang Goethe, Iphigenie auf Tauris
+
+Type:
+0 selections
+Property:
+0 selections
+
+=== Preview tab ===
+iframe present: true
+Entity:
+1 selection
+
+=== Extend tab ===
+Entity:
+1 selection
+Property:
+1 selection
+Reset	Submit
+▶
+ids:
+0:"kbga-actors-136"
+▶
+properties:
+▶
+0:
+id:"gender"
+
+View query results on the service
+Missing rows.kbga-actors-136 object in the response.

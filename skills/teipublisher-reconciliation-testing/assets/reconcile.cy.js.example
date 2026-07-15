@@ -1,0 +1,57 @@
+// reconcile.cy.js — EXAMPLE reconciliation API test for a Jinks profile.
+// Place at: profiles/reconcile/test/cypress/e2e/api/reconcile.cy.js
+// Vendor the official JSON Schemas under: test/cypress/fixtures/schemas/<version>/...
+//   (from https://github.com/reconciliation-api/specs — 0.2/schemas and 1.0-draft/schemas)
+// Set cypress.config.cjs baseUrl to your generated app:
+//   baseUrl: 'http://localhost:8080/exist/apps/<abbrev>'
+//
+// Uses base10 custom commands: cy.api() injects a localhost Origin (CORS-clean against the stock
+// origin-whitelist) and cy.validateSchema() comes from cypress-ajv-schema-validator.
+// Parameterise VERSION to cover BOTH 0.2 and 1.0 (response formats differ).
+
+const VERSION = '1.0' // run again with '0.2'
+
+describe(`reconciliation API (${VERSION})`, () => {
+  let manifestSchema
+  let resultSchema
+
+  before(() => {
+    cy.fixture(`schemas/${VERSION}/manifest.json`).then((s) => { manifestSchema = s })
+    cy.fixture(`schemas/${VERSION}/reconciliation-result-batch.json`).then((s) => { resultSchema = s })
+  })
+
+  it('GET (no params) returns a schema-valid service manifest', () => {
+    cy.api({ url: '/api/reconcile' })
+      .validateSchema(manifestSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        expect(body).to.have.property('versions')
+        // The service should advertise the version(s) it claims to implement.
+        expect(body.versions).to.include(VERSION)
+      })
+  })
+
+  it('POST a query batch returns a schema-valid result batch', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries: { q0: { query: 'Goethe' } } },
+    })
+      .validateSchema(resultSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        expect(body).to.have.property('q0')
+        expect(body.q0.result).to.be.an('array')
+        // Candidates should be ordered by descending score when present.
+        const scores = body.q0.result.map((c) => c.score)
+        expect(scores).to.deep.equal([...scores].sort((a, b) => b - a))
+      })
+  })
+
+  // Optional: sanity-check the schema wiring with the spec repo's own fixtures.
+  // it('rejects a known-invalid result batch', () => {
+  //   cy.fixture(`examples/${VERSION}/reconciliation-result-batch/invalid/missing-id.json`)
+  //     .then((bad) => { expect(() => /* validate(bad) */ null).to.exist })
+  // })
+})

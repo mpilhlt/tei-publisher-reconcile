@@ -7,4 +7,9 @@ tei-publisher-jinks-templates
 tei-publisher-roaster
 reconc-specs
 reconc-testbench
+reconc-testbench-0.2
 .opencode
+
+# Generated-app checkouts (jinks-cli `jinks create`/`update --sync` output; build
+# artifacts, not source) — see skills/teipublisher-reconciliation-testing.
+*-checkout/
