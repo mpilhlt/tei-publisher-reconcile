@@ -1,0 +1,128 @@
+# CI for the `reconcile` Jinks profile: boots a stock TEI Publisher v10 container,
+# uploads this repo's profile source into its Jinks server (a fresh container has
+# never heard of our custom "reconcile" profile - see
+# skills/teipublisher-reconciliation-testing/scripts/ci-bootstrap-profile.sh for why
+# a plain file upload isn't enough), generates a throwaway test app extending
+# base10+demo-data+registers+reconcile (mirroring the local "tp-reconc" demo app),
+# then runs the same Cypress + XQSuite suites used throughout local development.
+#
+# Deliberately pins the eXist/TEI Publisher image to :10.0.0, matching this project's
+# own documented reproducibility rationale (see AGENTS.md), rather than testing a
+# matrix of versions - this profile has no eXist-version-compatibility concerns of
+# its own to cover.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+
+env:
+  TEIPUB_IMAGE: docker.io/existdb/teipublisher:10.0.0
+  APP_ABBREV: tp-reconc-ci
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Validate XML files
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libxml2-utils
+          xmllint --noout $(find reconcile -type f -name '*.xml')
+
+      # jinks-cli requires Node >= 22 - see skills/teipublisher-reconciliation-testing
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install jinks-cli
+        run: npm install -g @teipublisher/jinks-cli
+
+      - name: Start TEI Publisher container
+        run: |
+          docker run -d --rm --name teipub -p 8080:8080 "$TEIPUB_IMAGE"
+
+      - name: Wait for Jinks server to be ready
+        timeout-minutes: 3
+        run: |
+          until curl -sSL -o /dev/null -w '%{http_code}' http://localhost:8080/exist/apps/jinks/ 2>/dev/null | grep -q 200; do
+            echo "Still waiting..."
+            sleep 3
+          done
+
+      - name: Upload reconcile profile source into the Jinks server
+        run: skills/teipublisher-reconciliation-testing/scripts/ci-bootstrap-profile.sh http://localhost:8080 "$GITHUB_WORKSPACE/reconcile"
+
+      - name: Create the test app
+        timeout-minutes: 5
+        run: |
+          cat > /tmp/ci-app-config.json << 'EOF'
+          {
+              "overwrite": "default",
+              "label": "Reconcile CI Test App",
+              "id": "https://e-editiones.org/apps/tp-reconc-ci",
+              "extends": ["base10", "demo-data", "registers", "reconcile"],
+              "pkg": { "abbrev": "tp-reconc-ci" },
+              "description": "Ephemeral CI test app for the reconcile profile"
+          }
+          EOF
+          jinks create "$APP_ABBREV" -c /tmp/ci-app-config.json -s http://localhost:8080/exist/apps/jinks -u tei -p simple
+
+      - name: Wait for the test app to respond
+        timeout-minutes: 2
+        run: |
+          until curl -sS -o /dev/null -w '%{http_code}' -m 5 "http://localhost:8080/exist/apps/$APP_ABBREV/api/reconcile" 2>/dev/null | grep -q 200; do
+            echo "Still waiting..."
+            sleep 5
+          done
+
+      - name: Run XQSuite tests
+        run: skills/teipublisher-reconciliation-testing/scripts/ci-run-xqsuite.sh "$APP_ABBREV" http://localhost:8080
+
+      - name: CORS check
+        run: skills/teipublisher-reconciliation-testing/scripts/cors-check.sh "http://localhost:8080/exist/apps/$APP_ABBREV/api/reconcile"
+
+      - name: Assemble Cypress checkout
+        run: skills/teipublisher-reconciliation-testing/scripts/ci-assemble-checkout.sh "$APP_ABBREV" cypress-checkout http://localhost:8080
+
+      - name: Install Cypress dependencies
+        working-directory: cypress-checkout
+        run: npm install --no-audit --no-fund
+
+      - name: Run Cypress e2e tests
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: cypress-checkout
+          config: baseUrl=http://localhost:8080/exist/apps/${{ env.APP_ABBREV }}
+          browser: chrome
+
+      - name: Debug logs on failure
+        if: failure()
+        run: docker logs teipub | grep -i error || true
+
+      - name: Copy exist.log on failure
+        if: failure()
+        run: docker cp teipub:/exist/logs/exist.log ./exist.log || true
+
+      - name: Upload exist.log artifact
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: exist-log
+          path: exist.log
+
+      - name: Upload Cypress screenshots
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cypress-screenshots
+          path: cypress-checkout/test/cypress/screenshots/
