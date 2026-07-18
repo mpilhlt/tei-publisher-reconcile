@@ -3,9 +3,15 @@ xquery version "3.1";
 (:~
  : Reconciliation type registry — the single place to add, remove, or customize what
  : "kinds of things" this service reconciles. Sensible defaults ship here for the
- : typical case (person/place/organization/work against the "registers" profile's
- : local authority files); edit this file directly to point at different content, a
- : different vocabulary, or an entirely different scoring algorithm.
+ : typical case (person/place/organization/work read from the app's "registers"
+ : collection — see $config:register-root/$config:register-map in base10's own
+ : config.xqm; this is a base10-level convention, not specific to the "registers"
+ : profile). This profile only depends on "base10" — installing the "registers"
+ : profile too is optional: if present, its browse pages are used for
+ : GET /api/reconcile/entity/{id} (see "view" below); if not, a built-in ODD-based
+ : preview is used instead, with identical defaults either way. Edit this file
+ : directly to point at different content, a different vocabulary, or an entirely
+ : different scoring algorithm.
  :
  : Jinks tracks this file like any other: a fresh `jinks create` copies these
  : defaults in; if you edit it locally afterwards, a later `jinks update` will
@@ -14,10 +20,24 @@ xquery version "3.1";
  :
  : Each entry in $reconc-config:TYPES is a map:
  :   name          - display name, used in the manifest and suggest/type
- :   view          - (optional) a "registers" profile browse-page name (e.g. "people")
- :                   to redirect to for GET /api/reconcile/entity/{id}; omit if this
- :                   type has no dedicated browse page (the preview renderer is used
- :                   as a fallback instead)
+ :   view          - (optional) either:
+ :                     - an xs:string naming a "registers" profile browse page (e.g.
+ :                       "people") to redirect to for GET /api/reconcile/entity/{id}.
+ :                       Only used if the "registers" profile is actually installed
+ :                       in *this* app (checked at request time via
+ :                       reconc-config:profile-installed("registers"), below) — if
+ :                       it isn't, or no "view" is given at all, the default
+ :                       ODD-based preview renderer is used instead (see
+ :                       "preview"/"preview-mode"). This is what makes the shipped
+ :                       defaults work identically whether or not "registers" is
+ :                       part of the app: reconcile itself only depends on "base10".
+ :                     - a function($id as xs:string, $found as map(*), $request as
+ :                       map(*)) as item()* for full control over the
+ :                       /entity/{id} response — e.g. redirect somewhere else
+ :                       entirely, or render something bespoke. Build the response
+ :                       yourself with router:response(...); reconc-config:profile-installed(...)
+ :                       is available if your override wants the same
+ :                       is-this-profile-present check.
  :   entities      - function() as element()* — returns every candidate entity node
  :                   for this type. Always a function (not an XPath string): the
  :                   context — which collection, relative to what — is inherently
@@ -47,6 +67,21 @@ import module namespace config = "http://www.tei-c.org/tei-simple/config" at "co
 import module namespace reconc-score = "http://teipublisher.com/api/reconcile/scoring" at "reconcile-scoring.xql";
 
 declare namespace tei = "http://www.tei-c.org/ns/1.0";
+
+(:~ True if the named Jinks profile was extended into this application, per the
+ : generator's merged context.json "profiles" list (written once at app-generation
+ : time by every `jinks create`/`jinks update` — see generator:save-config in
+ : tei-publisher-jinks/modules/generator.xql). This is the same condition that
+ : determines whether that profile's own routes/pages actually exist in this app,
+ : so it's a reliable way to check "would a link to profile X's UI actually work"
+ : rather than assuming X is present. Used below to make the shipped "view"
+ : defaults degrade gracefully when "registers" isn't installed; also useful from
+ : a custom "view" (or other) override that wants the same check. :)
+declare function reconc-config:profile-installed($name as xs:string) as xs:boolean {
+    let $ctx := json-doc($config:app-root || "/context.json")
+    return
+        $name = $ctx?profiles?*
+};
 
 declare variable $reconc-config:TYPES := map {
     "person": map {

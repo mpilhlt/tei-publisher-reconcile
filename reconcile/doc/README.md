@@ -9,9 +9,15 @@ properties are fetchable, how a preview renders, how candidates are ranked — l
 ## What ships by default
 
 `reconcile-config.xql` ships defaults for four types — `person`, `place`, `organization`, `work` —
-matched against the `registers` profile's local authority files (the same registers the entity
-editors in `annotate` create/edit). Matching/ranking uses a simple string-similarity function,
-`reconc-score:default` in `modules/reconcile-scoring.xql`.
+read from the app's `registers` collection (`$config:register-root`/`$config:register-map` — a
+**base10** convention, the same one the `annotate` entity editors write to). Matching/ranking uses
+a simple string-similarity function, `reconc-score:default` in `modules/reconcile-scoring.xql`.
+
+This profile only `depends` on `base10`. The **`registers` profile** (the one that adds the
+`/people`, `/places`, ... browse pages) is entirely optional: if it's installed, `GET
+/api/reconcile/entity/{id}` redirects to its browse page for types that configure a `"view"`; if
+it isn't, the same endpoint transparently falls back to a built-in ODD-based preview instead — see
+`"view"` below. There is no scenario where a shipped default requires `registers` to be present.
 
 ## Customizing it
 
@@ -30,7 +36,7 @@ Each entry in `$reconc-config:TYPES` is a map:
 ```xquery
 "person": map {
     "name": "Person",                    (: display name, manifest + suggest/type :)
-    "view": "people",                    (: optional: registers browse-page name for /entity/{id} :)
+    "view": "people",                    (: optional: registers browse-page name for /entity/{id} — see below :)
     "entities": function() as element()* {
         collection($config:register-root)/id($config:register-map?person?id)//tei:person[@xml:id]
     },
@@ -87,6 +93,30 @@ is equivalent to
   source file, not end-user input), but is worth knowing if you ever consider exposing this file to
   a less-trusted editor.
 
+### `"view"`: redirecting to a browse page, safely
+
+`"view"` controls what `GET /api/reconcile/entity/{id}` does for a type, and accepts either:
+
+- an `xs:string` naming a `registers`-profile browse page (e.g. `"people"`) — but it's only
+  actually used if the `registers` profile is confirmed installed in *this* app
+  (`reconc-config:profile-installed("registers")`, checked against the generator's own
+  `context.json` at request time, not assumed); otherwise the endpoint falls through to the same
+  default preview rendering used when no `"view"` is set at all. This is what lets the shipped
+  `"view": "people"`/`"places"` defaults work identically whether or not you happen to have
+  `registers` installed — you never need to remove them yourself.
+- a `function($id as xs:string, $found as map(*), $request as map(*)) as item()*` for full control
+  — build the response yourself with `router:response(...)` (redirect somewhere else entirely,
+  render something bespoke, whatever you need). `reconc-config:profile-installed(...)` is public,
+  so a custom override can reuse the same "is this other profile actually here" check.
+- omitted entirely — always uses the default preview rendering (same as the string case when
+  `registers` isn't installed).
+
+```xquery
+"view": function($id as xs:string, $found as map(*), $request as map(*)) as item()* {
+    router:response(303, (), (), map { "Location": "https://example.org/persons/" || $id })
+}
+```
+
 ### Matching / ranking
 
 ```xquery
@@ -131,5 +161,6 @@ rendering for that type. No other endpoint needs extra configuration for a custo
   against both spec versions), exercises the shipped defaults end-to-end over HTTP.
 - `test/xqsuite/reconcile-config.xqm` — layer-1 unit tests, decoupled from HTTP: check the shipped
   defaults resolve against real register data, and separately prove the *mechanism* a custom config
-  relies on (XPath-string extraction via `util:eval`, a swapped scoring function) works, using
-  stand-ins deliberately different from the shipped defaults.
+  relies on (XPath-string extraction via `util:eval`, a swapped scoring function,
+  `reconc-config:profile-installed` against both a real-and-present and a made-up-and-absent
+  profile name) works, using stand-ins deliberately different from the shipped defaults.

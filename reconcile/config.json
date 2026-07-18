@@ -8,8 +8,7 @@
     "description": "OpenRefine reconciliation endpoints (spec 0.2 and 1.0-draft)",
     "order": 100,
     "depends": [
-        "base10",
-        "registers"
+        "base10"
     ],
     "skipSource": [
         "repo.xml",

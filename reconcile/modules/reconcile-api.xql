@@ -391,9 +391,16 @@ declare function reconc:preview($request as map(*)) {
 };
 
 (:~
- : Entity view (manifest.view): redirects to the real registers browse page when the
- : entity's type has one configured ("view"), otherwise renders the preview HTML.
- : GET /api/reconcile/entity/{id}
+ : Entity view (manifest.view): GET /api/reconcile/entity/{id}
+ :
+ : The entity's type "view" config (see reconcile-config.xql) decides what happens:
+ :  - a function item is called directly for full control over the response;
+ :  - an xs:string (a "registers" browse-page name) redirects there, but only if
+ :    the "registers" profile is actually installed in this app — otherwise falls
+ :    through to the same ODD-based preview rendering used when no "view" is
+ :    configured at all. This is what lets the shipped defaults (which set
+ :    "view": "people"/"places") work whether or not "registers" happens to be
+ :    part of the app: reconcile itself only depends on "base10".
  :)
 declare function reconc:entity($request as map(*)) {
     let $id := $request?parameters?id
@@ -404,7 +411,9 @@ declare function reconc:entity($request as map(*)) {
         else
             let $view := $reconc-config:TYPES?($found?type-id)?view
             return
-                if (exists($view)) then
+                if ($view instance of function(*)) then
+                    $view($id, $found, $request)
+                else if (exists($view) and reconc-config:profile-installed("registers")) then
                     router:response(303, (), (), map { "Location": reconc:site-root($request) || "/" || $view || "/" || $id })
                 else
                     router:response(200, "text/html", reconc:render-html($request, $found))

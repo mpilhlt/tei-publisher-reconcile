@@ -80,3 +80,25 @@ function t:score-contract-is-swappable() {
     let $custom-score := function($label as xs:string?, $query as xs:string?) as xs:double { 42 }
     return ($custom-score("anything", "anything"), $custom-score("completely different", "unrelated"))
 };
+
+(:~ reconc-config:profile-installed reads the real, generator-written context.json of
+ : the app this test runs in — "registers" is genuinely extended by every demo app
+ : this profile is tested against (see reconcile/doc/README.md), so this is an
+ : integration check, not a mock. Guards the "view" fallback logic in
+ : reconcile-api.xql's reconc:entity: a redirect to a "registers" browse page is only
+ : attempted when this returns true. :)
+declare
+    %test:assertTrue
+function t:profile-installed-detects-registers() {
+    reconc-config:profile-installed("registers")
+};
+
+(:~ A profile that was never extended into this app must report false, not error out
+ : (e.g. on a missing/empty context.json entry) — this is the exact condition under
+ : which reconc:entity falls back to its own ODD-based preview instead of redirecting
+ : to a "registers" page that wouldn't exist. :)
+declare
+    %test:assertFalse
+function t:profile-installed-false-for-absent-profile() {
+    reconc-config:profile-installed("definitely-not-a-real-profile-xyz")
+};
