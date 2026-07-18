@@ -192,3 +192,23 @@ function t:external-identifier-properties-resolve-against-real-data() {
         and (some $e in ($reconc-config:TYPES?place?entities)() satisfies exists($place-geonames($e)))
         and (some $e in ($reconc-config:TYPES?work?entities)() satisfies exists($work-gnd($e)))
 };
+
+(:~ Production-hardening request-size caps (reconcile-api.xql reads and enforces
+ : these — see reconc:reconcile-1.0/0.2 and reconc:extend-response for the reject-
+ : vs-clamp distinction). This module only proves the knobs exist as positive
+ : xs:integer values a deployer can override; the actual reject/clamp *behavior* is
+ : covered end-to-end over HTTP by test/cypress/e2e/api/reconcile.cy.js's
+ : "request-size caps" suite, since that's what actually exercises the enforcement
+ : points (reconcile-api.xql's HTTP-facing functions are intentionally private and
+ : not unit-testable in isolation). :)
+declare
+    %test:assertTrue
+function t:request-size-caps-are-positive-integers() {
+    every $limit in (
+        $reconc-config:MAX_BATCH_SIZE,
+        $reconc-config:MAX_LIMIT,
+        $reconc-config:MAX_EXTEND_IDS,
+        $reconc-config:MAX_EXTEND_PROPERTIES
+    )
+    satisfies $limit instance of xs:integer and $limit gt 0
+};

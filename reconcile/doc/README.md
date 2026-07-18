@@ -277,6 +277,76 @@ knowing if you're reading `reconcile-api.xql`'s `reconc:candidate-pool`/`reconc:
 *with* `"fulltext-search"` don't need this: `ft:query()` is already a cheap, indexed, per-query-text
 lookup, so there's nothing to usefully precompute ahead of knowing each query's text.
 
+## Production hardening
+
+The reconciliation spec doesn't define an authentication mechanism, and real-world reconciliation
+services (Wikidata's, GND's, etc.) are conventionally public — so this profile ships with no
+request-rate limit and no auth requirement by default, matching that convention. Three things are
+worth knowing if you're deploying this beyond local testing:
+
+### Request-size caps
+
+`reconcile-config.xql` declares four limits, all overridable like any other config value:
+
+- `$reconc-config:MAX_BATCH_SIZE` (default 500) — the max number of queries in one `POST
+  /api/reconcile` batch (both spec shapes: the 1.0-draft `queries` array and the 0.2 id-keyed
+  object).
+- `$reconc-config:MAX_EXTEND_IDS` / `$reconc-config:MAX_EXTEND_PROPERTIES` (default 500 / 100) — the
+  max number of entity ids / properties in one `POST /api/reconcile/extend` request.
+- `$reconc-config:MAX_LIMIT` (default 1000) — the max `"limit"` a single query or `/suggest/*` call
+  can request.
+
+The first three are **hard limits**: exceeding one gets the whole request rejected with HTTP 400,
+never silently truncated. This is deliberate — reconciliation batch responses are strictly
+*positional* (`results[i]` must correspond to `queries[i]`; `/extend`'s rows must cover every
+requested id/property), so silently dropping entries would silently corrupt that correspondence for
+the caller, which is worse than an explicit, actionable error. `MAX_LIMIT` instead **clamps**
+silently: asking for "too many" results isn't actually invalid, just excessive, so the more
+client-friendly behavior is to cap it and still answer, not reject the request.
+
+### Rate limiting
+
+Not implemented in-app, and deliberately so: eXist has no low-overhead, safe primitive for
+tracking request counts across concurrent requests without adding DB I/O to every single request —
+which would itself become a self-inflicted slowdown under load. The conventional, better place for
+this is a reverse proxy in front of the app. For nginx:
+
+```nginx
+limit_req_zone $binary_remote_addr zone=reconcile:10m rate=10r/s;
+
+location /exist/apps/tp-reconc/api/reconcile {
+    limit_req zone=reconcile burst=20 nodelay;
+    proxy_pass http://localhost:8080;
+}
+```
+
+Adjust the zone/rate/burst to your expected traffic; a Traefik `RateLimit` middleware achieves the
+same thing if that's your proxy of choice.
+
+### Restricting access (optional)
+
+`reconcile-api.tpl.json` already declares `basicAuth`/`cookieAuth` `securitySchemes` and a top-level
+`"security"` requirement referencing them (this only makes roaster's `auth:standard-authorization`
+middleware — already wired into every generated app's `modules/lib/api.xql` via `roaster:route/2` —
+*attempt* to resolve a logged-in user per request; see `tei-publisher-roaster/content/auth.xql`). By
+itself this does **not** restrict anything: a route is only actually gated once it also carries an
+`"x-constraints"` object, checked by `auth:is-authorized-user`/`auth:is-public-route`. To make one
+operation (or all of them) login-only, add `"x-constraints"` to the relevant operation object(s) in
+`reconcile-api.tpl.json`, e.g.:
+
+```json
+"post": {
+    "operationId": "reconc:reconcile",
+    "x-constraints": { "groups": ["reconcile-users"] },
+    ...
+}
+```
+
+(`"user": ["alice", "bob"]` restricts to specific named accounts instead of/alongside a group.)
+Regenerate the app; unauthenticated or non-matching requests then get HTTP 401. Do this per
+operation you actually want private — leave the rest alone to keep them public, which is the right
+default for a spec-conformant, OpenRefine-compatible service.
+
 ## Example: adding a fifth type
 
 ```xquery

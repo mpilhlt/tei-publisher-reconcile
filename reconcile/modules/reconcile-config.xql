@@ -219,3 +219,22 @@ declare variable $reconc-config:TYPES := map {
  : scoring, weighting by property matches, etc.) — see reconc-score:default for the
  : signature to match. :)
 declare variable $reconc-config:SCORE := reconc-score:default#2;
+
+(:~ Request-size caps (see reconcile-api.xql for exactly where each is applied).
+ : Two different enforcement styles are used, deliberately:
+ :  - MAX_BATCH_SIZE / MAX_EXTEND_IDS / MAX_EXTEND_PROPERTIES are hard limits: a
+ :    request that exceeds one is rejected outright (HTTP 400), never silently
+ :    truncated. Reconciliation batch responses are strictly *positional*
+ :    ("results[i]" corresponds to "queries[i]"; /extend's "rows" must cover every
+ :    requested id/property) — silently dropping entries would silently corrupt
+ :    that correspondence for the caller, which is worse than an explicit,
+ :    actionable error.
+ :  - MAX_LIMIT is a soft cap: an over-large "limit" parameter is silently clamped
+ :    down to it, not rejected — asking for "too many" results isn't invalid, just
+ :    excessive, and clamping is the more client-friendly, conventional behavior.
+ : Raise or lower these for your own deployment's expected batch sizes and
+ : available resources; there is no protocol-mandated value for any of them. :)
+declare variable $reconc-config:MAX_BATCH_SIZE := 500;
+declare variable $reconc-config:MAX_LIMIT := 1000;
+declare variable $reconc-config:MAX_EXTEND_IDS := 500;
+declare variable $reconc-config:MAX_EXTEND_PROPERTIES := 100;

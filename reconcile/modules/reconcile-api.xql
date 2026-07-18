@@ -362,39 +362,50 @@ declare %private function reconc:all-queried-types($type-restrictions as array(*
 
 declare %private function reconc:reconcile-1.0($body as map(*)) as map(*) {
     let $queries := $body?queries?*
-    let $per-query-types := for $query in $queries return array { reconc:normalize-types($query?type) }
-    let $pool := reconc:candidate-pool(reconc:all-queried-types($per-query-types))
     return
-        map {
-            "results": array {
-                for $query at $i in $queries
-                let $conditions := reconc-cond:normalize-1.0($query)
-                let $limit := ($query?limit, 10)[1]
-                let $candidates := reconc:candidates($per-query-types[$i]?*, $conditions, $limit, $pool)
-                return
-                    map {
-                        "candidates": array { for $c in $candidates return reconc:format-candidate($c) }
+        if (count($queries) > $reconc-config:MAX_BATCH_SIZE) then
+            error($errors:BAD_REQUEST, "Batch too large: " || count($queries) || " queries (max " || $reconc-config:MAX_BATCH_SIZE || ")")
+        else
+            let $per-query-types := for $query in $queries return array { reconc:normalize-types($query?type) }
+            let $pool := reconc:candidate-pool(reconc:all-queried-types($per-query-types))
+            return
+                map {
+                    "results": array {
+                        for $query at $i in $queries
+                        let $conditions := reconc-cond:normalize-1.0($query)
+                        (: $query?limit comes from parse-json (xs:double); cast before min() with the
+                         : xs:integer MAX_LIMIT/literal default, or eXist raises FORG0006 comparing
+                         : xs:double and xs:integer. :)
+                        let $limit := min((xs:integer(($query?limit, 10)[1]), $reconc-config:MAX_LIMIT))
+                        let $candidates := reconc:candidates($per-query-types[$i]?*, $conditions, $limit, $pool)
+                        return
+                            map {
+                                "candidates": array { for $c in $candidates return reconc:format-candidate($c) }
+                            }
                     }
-            }
-        }
+                }
 };
 
 declare %private function reconc:reconcile-0.2($query-map as map(*)) as map(*) {
     let $keys := map:keys($query-map)
-    let $per-query-types := for $key in $keys return array { reconc:normalize-types($query-map($key)?type) }
-    let $pool := reconc:candidate-pool(reconc:all-queried-types($per-query-types))
     return
-        map:merge(
-            for $key at $i in $keys
-            let $query := $query-map($key)
-            let $conditions := reconc-cond:normalize-0.2($query)
-            let $limit := ($query?limit, 10)[1]
-            let $candidates := reconc:candidates($per-query-types[$i]?*, $conditions, $limit, $pool)
+        if (count($keys) > $reconc-config:MAX_BATCH_SIZE) then
+            error($errors:BAD_REQUEST, "Batch too large: " || count($keys) || " queries (max " || $reconc-config:MAX_BATCH_SIZE || ")")
+        else
+            let $per-query-types := for $key in $keys return array { reconc:normalize-types($query-map($key)?type) }
+            let $pool := reconc:candidate-pool(reconc:all-queried-types($per-query-types))
             return
-                map:entry($key, map {
-                    "result": array { for $c in $candidates return reconc:format-candidate($c) }
-                })
-        )
+                map:merge(
+                    for $key at $i in $keys
+                    let $query := $query-map($key)
+                    let $conditions := reconc-cond:normalize-0.2($query)
+                    let $limit := min((xs:integer(($query?limit, 10)[1]), $reconc-config:MAX_LIMIT))
+                    let $candidates := reconc:candidates($per-query-types[$i]?*, $conditions, $limit, $pool)
+                    return
+                        map:entry($key, map {
+                            "result": array { for $c in $candidates return reconc:format-candidate($c) }
+                        })
+                )
 };
 
 (:~
@@ -432,7 +443,7 @@ declare function reconc:reconcile($request as map(*)) {
 declare function reconc:suggest-entity($request as map(*)) {
     let $prefix := $request?parameters?prefix
     let $types := reconc:normalize-types($request?parameters?type)
-    let $limit := ($request?parameters?limit, 10)[1]
+    let $limit := min((($request?parameters?limit, 10)[1], $reconc-config:MAX_LIMIT))
     let $candidates := reconc:candidates($types, map { "name": $prefix, "ids": (), "properties": [] }, $limit, map {})
     return
         map {
@@ -467,7 +478,7 @@ declare %private function reconc:properties-for-type($type-id as xs:string?) as 
 declare function reconc:suggest-property($request as map(*)) {
     let $prefix := reconc:normalize-text($request?parameters?prefix)
     let $type := $request?parameters?type
-    let $limit := ($request?parameters?limit, 20)[1]
+    let $limit := min((($request?parameters?limit, 20)[1], $reconc-config:MAX_LIMIT))
     let $matches :=
         for $p in reconc:properties-for-type($type)
         where $prefix eq "" or contains(reconc:normalize-text($p?id), $prefix) or contains(reconc:normalize-text($p?name), $prefix)
@@ -482,7 +493,7 @@ declare function reconc:suggest-property($request as map(*)) {
  :)
 declare function reconc:suggest-type($request as map(*)) {
     let $prefix := reconc:normalize-text($request?parameters?prefix)
-    let $limit := ($request?parameters?limit, 20)[1]
+    let $limit := min((($request?parameters?limit, 20)[1], $reconc-config:MAX_LIMIT))
     let $matches :=
         map:for-each($reconc-config:TYPES, function($id, $def) {
             if ($prefix eq "" or contains(reconc:normalize-text($id), $prefix) or contains(reconc:normalize-text($def?name), $prefix)) then
@@ -576,6 +587,16 @@ declare %private function reconc:property-by-id($id as xs:string?) as map(*)? {
 declare %private function reconc:extend-response($query as map(*), $version as xs:string?) as map(*) {
     let $ids := $query?ids?*
     let $properties := $query?properties?*
+    return
+        if (count($ids) > $reconc-config:MAX_EXTEND_IDS) then
+            error($errors:BAD_REQUEST, "Too many ids: " || count($ids) || " (max " || $reconc-config:MAX_EXTEND_IDS || ")")
+        else if (count($properties) > $reconc-config:MAX_EXTEND_PROPERTIES) then
+            error($errors:BAD_REQUEST, "Too many properties: " || count($properties) || " (max " || $reconc-config:MAX_EXTEND_PROPERTIES || ")")
+        else
+            reconc:extend-response-unchecked($ids, $properties, $version)
+};
+
+declare %private function reconc:extend-response-unchecked($ids as xs:string*, $properties as item()*, $version as xs:string?) as map(*) {
     let $meta := array {
         for $p in $properties
         let $prop-def := reconc:property-by-id($p?id)

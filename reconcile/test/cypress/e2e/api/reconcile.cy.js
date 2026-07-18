@@ -431,3 +431,97 @@ describe('data extension (0.2)', () => {
       })
   })
 })
+
+describe('request-size caps (production hardening)', () => {
+  let resultSchema
+  let extendResponseSchema
+
+  before(() => {
+    cy.fixture('schemas/1.0/reconciliation-result-batch.json').then((s) => { resultSchema = s })
+    cy.fixture('schemas/1.0/data-extension-response.json').then((s) => { extendResponseSchema = s })
+  })
+
+  it('POST /api/reconcile rejects a batch over MAX_BATCH_SIZE with 400 (1.0-draft shape)', () => {
+    const queries = Array.from({ length: 501 }, () => ({ conditions: [{ matchType: 'name', propertyValue: 'Goethe' }] }))
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries },
+      failOnStatusCode: false,
+    }).its('status').should('eq', 400)
+  })
+
+  it('POST /api/reconcile rejects a batch over MAX_BATCH_SIZE with 400 (0.2 shape)', () => {
+    const queries = {}
+    for (let i = 0; i < 501; i++) queries['q' + i] = { query: 'Goethe' }
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries },
+      failOnStatusCode: false,
+    }).its('status').should('eq', 400)
+  })
+
+  it('a batch within MAX_BATCH_SIZE still succeeds', () => {
+    const queries = Array.from({ length: 10 }, () => ({ conditions: [{ matchType: 'name', propertyValue: 'Goethe' }] }))
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries },
+    })
+      .validateSchema(resultSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        expect(body.results).to.have.length(10)
+      })
+  })
+
+  it('POST /extend rejects a request over MAX_EXTEND_IDS with 400', () => {
+    const ids = Array.from({ length: 501 }, (_, i) => 'id' + i)
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/extend',
+      headers: { 'Content-Type': 'application/json' },
+      body: { ids, properties: [{ id: 'gender' }] },
+      failOnStatusCode: false,
+    }).its('status').should('eq', 400)
+  })
+
+  it('POST /extend rejects a request over MAX_EXTEND_PROPERTIES with 400', () => {
+    const properties = Array.from({ length: 101 }, (_, i) => ({ id: 'p' + i }))
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/extend',
+      headers: { 'Content-Type': 'application/json' },
+      body: { ids: ['kbga-actors-136'], properties },
+      failOnStatusCode: false,
+    }).its('status').should('eq', 400)
+  })
+
+  it('a normal /extend request stays unaffected by the new caps', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/extend',
+      headers: { 'Content-Type': 'application/json' },
+      body: { ids: ['kbga-actors-136'], properties: [{ id: 'gender' }] },
+    })
+      .validateSchema(extendResponseSchema)
+      .its('status')
+      .should('eq', 200)
+  })
+
+  it('an over-large "limit" is clamped rather than rejected or crashing the server', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries: [{ conditions: [{ matchType: 'name', propertyValue: 'Goethe' }], limit: 999999999 }] },
+    })
+      .validateSchema(resultSchema)
+      .its('status')
+      .should('eq', 200)
+  })
+})
