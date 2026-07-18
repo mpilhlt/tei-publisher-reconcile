@@ -11,7 +11,14 @@ properties are fetchable, how a preview renders, how candidates are ranked — l
 `reconcile-config.xql` ships defaults for four types — `person`, `place`, `organization`, `work` —
 read from the app's `registers` collection (`$config:register-root`/`$config:register-map` — a
 **base10** convention, the same one the `annotate` entity editors write to). Matching/ranking uses
-a simple string-similarity function, `reconc-score:default` in `modules/reconcile-scoring.xql`.
+a string-similarity function with a typo-tolerant fallback tier, `reconc-score:default` in
+`modules/reconcile-scoring.xql` (see "Matching / ranking" below); `person`/`place`/`work` also
+pre-filter candidates through a Lucene full-text index for speed on larger collections (see
+`"fulltext-search"` below) — `organization` doesn't, since it has no real data or index in this
+demo app to validate one against. `person`/`place` additionally match against every name *variant*
+an entity has, not just its primary display name (see `"labels"` below), and all four types expose
+a few real external-identifier extend properties (GND for person/work, GeoNames/Wikidata for place)
+alongside their original ones.
 
 This profile only `depends` on `base10`. The **`registers` profile** (the one that adds the
 `/people`, `/places`, ... browse pages) is entirely optional: if it's installed, `GET
@@ -41,6 +48,8 @@ Each entry in `$reconc-config:TYPES` is a map:
         collection($config:register-root)/id($config:register-map?person?id)//tei:person[@xml:id]
     },
     "label": function($e as element()) as xs:string { ... },   (: OR an xs:string XPath — see below :)
+    "labels": function($e as element()) as xs:string* { ... }, (: optional: every name variant to match against — see below :)
+    "fulltext-search": function($query as xs:string) as element()* { ... },  (: optional: Lucene pre-filter — see below :)
     "preview-mode": "register-overview", (: optional: ODD web-transform mode for the default preview :)
     "preview": function($e as element()) as node() { ... },    (: optional: full override of preview rendering :)
     "properties": map {
@@ -52,7 +61,10 @@ Each entry in `$reconc-config:TYPES` is a map:
 To point at completely different content — a different collection, a non-register vocabulary, a
 different TEI element altogether — just write a different `"entities"` closure; nothing else in
 the profile needs to know or care. To drop a type, remove its entry; to add one, add a new key.
-Property ids only need to be unique *within* a type's `properties` map, not globally.
+Property ids only need to be unique *within* a type's `properties` map, not globally — the shipped
+defaults actually rely on this (both `"person"` and `"work"` have a `"gnd"` property, each with its
+own extractor); `/extend` always resolves a property against the *matched entity's own type*, never
+just the first type that happens to define a property with that id.
 
 `"entities"` is always a zero-argument function item (never a bare XPath string) — the context for
 a *selection* XPath (which collection? relative to what?) is inherently ambiguous, so a closure is
@@ -117,17 +129,76 @@ is equivalent to
 }
 ```
 
+### `"labels"`: matching every name variant, not just the display name
+
+Real entities often have more than one name worth matching against — historical spellings,
+abbreviations, sort forms — even though only one of them should ever be *shown*. `"labels"` is the
+plural sibling of `"label"`: same rules (function item or XPath string, but expected to select more
+than one node), used only for **scoring**, never for display. A query is scored against every
+variant and the best match wins; `candidate.name` in the response always comes from `"label"`
+alone, untouched.
+
+```xquery
+"labels": function($e as element()) as xs:string* {
+    $e/tei:persName/string()   (: every persName, not just the "main" one "label" prefers :)
+}
+```
+
+Omit it for a type that only ever has one name form — matching then just uses `"label"` by itself,
+identical to before `"labels"` existed. That's why the shipped `"organization"`/`"work"` defaults
+don't set it: this demo app's data for those two never has more than one name/title to begin with,
+so there'd be nothing to gain.
+
+### `"fulltext-search"`: fast candidate pre-filtering with fuzzy recall
+
+For a type with more than a handful of entities, scoring every single one on every query gets slow.
+`"fulltext-search"` is an optional, faster alternative to `"entities"` for the *matching* path (only
+— `"entities"` itself is still used everywhere else, e.g. `/suggest/type`'s candidate counts):
+`function($query as xs:string) as element()*`, expected to pre-filter down to plausible candidates
+using a Lucene full-text index already declared in the app's `collection.xconf`.
+
+```xquery
+"fulltext-search": function($query as xs:string) as element()* {
+    collection($config:register-root)/id($config:register-map?person?id)//tei:person[
+        @xml:id and ft:query(., reconc-fulltext:fuzzy-query("name", $query), map { "leading-wildcard": "yes", "filter-rewrite": "yes" })
+    ]
+}
+```
+
+`reconc-fulltext:fuzzy-query($field, $query)` (from the small shared `modules/reconcile-fulltext.xql`,
+already imported by this file) builds a Lucene query string with the classic `~` fuzzy operator on
+every query token, so a typo still matches. **The `ft:query(...)` predicate has to be written
+directly inside your own path expression, exactly like the example above** — it cannot be applied
+afterwards as a filter on `("entities")()`'s result. eXist only rewrites `ft:query()` into an actual
+index lookup when it's a predicate *inside* the same path expression doing the collection traversal;
+applied to an already-materialized node sequence it still runs, just roughly 300x slower in testing
+against this project's own demo data (955ms vs. 3ms for the same 33-entity collection) — the whole
+point of this field is defeated if it's not written this way. Leaving `"fulltext-search"` unset (the
+safe default) falls back to scoring every entity from `"entities"` individually — slower for a large
+collection, but always correct regardless of what is or isn't indexed, so this is purely opt-in.
+Only set it for a type whose element is genuinely covered by `collection.xconf` — the shipped
+`person`/`place`/`work` defaults all reuse the same `"name"` field the `registers` profile itself
+already searches; `"organization"` deliberately leaves it unset, since its `tei:org` elements aren't
+indexed at all in the shipped `collection.xconf`.
+
 ### Matching / ranking
 
 ```xquery
 declare variable $reconc-config:SCORE := reconc-score:default#2;
 ```
 
-Point this at any `function($label as xs:string?, $query as xs:string?) as xs:double` — fuzzy
-matching, an external NER/embedding-based similarity service, weighting by which properties also
-matched, whatever you need. `reconc-score:default` in `modules/reconcile-scoring.xql` is public and
-composable, so you can also wrap it (e.g. "call the default, then add a language-match boost")
-rather than writing one from scratch.
+Point this at any `function($label as xs:string?, $query as xs:string?) as xs:double` — an external
+NER/embedding-based similarity service, weighting by which properties also matched, whatever you
+need. `reconc-score:default` in `modules/reconcile-scoring.xql` is public and composable, so you can
+also wrap it (e.g. "call the default, then add a language-match boost") rather than writing one from
+scratch. It already includes a typo-tolerant fallback tier: exact match scores 100, substring
+containment and token overlap score proportionally, and — only once those all fail, and only for
+tokens at least 4 characters with an edit distance of at most 2 — a hand-rolled Levenshtein-based
+similarity kicks in, compared **token by token** rather than as whole strings (a typo in one word of
+a multi-word name like "Goethe, Johann Wolfgang von" would rarely be within edit distance 2 of the
+*whole* string, but easily is of just the one mistyped word). This fuzzy tier is what makes
+`"fulltext-search"`'s Lucene-level fuzzy recall actually useful: without it, a fuzzy-matched
+candidate would still score 0 and get silently dropped by `reconc:candidates`.
 
 ### Preview rendering
 
@@ -138,6 +209,16 @@ call the `registers` profile itself uses — in the type's `"preview-mode"` (def
 or a `"preview"` function item (`function($entity as element()) as node()`) to fully replace
 rendering for that type. No other endpoint needs extra configuration for a custom type: manifest,
 `/suggest/*`, and `/extend`/`/extend/propose` all derive automatically from `$reconc-config:TYPES`.
+
+### Batch requests and repeated work
+
+A single `POST /api/reconcile` request can carry many queries at once. For any type *without*
+`"fulltext-search"` (where the only way to find candidates is scoring every entity), `reconc:
+reconcile-1.0`/`reconc:reconcile-0.2` precompute that type's entities/labels once per *request*
+rather than once per *query* — invisible from the config side, nothing to opt into, but worth
+knowing if you're reading `reconcile-api.xql`'s `reconc:candidate-pool`/`reconc:candidates`. Types
+*with* `"fulltext-search"` don't need this: `ft:query()` is already a cheap, indexed, per-query-text
+lookup, so there's nothing to usefully precompute ahead of knowing each query's text.
 
 ## Example: adding a fifth type
 
@@ -163,4 +244,12 @@ rendering for that type. No other endpoint needs extra configuration for a custo
   defaults resolve against real register data, and separately prove the *mechanism* a custom config
   relies on (XPath-string extraction via `util:eval`, a swapped scoring function,
   `reconc-config:profile-installed` against both a real-and-present and a made-up-and-absent
-  profile name) works, using stand-ins deliberately different from the shipped defaults.
+  profile name, the fuzzy scoring tier on both a whole-word and a one-word-of-many typo, the
+  `"labels"` extractor covering more than just the primary `"label"`, `reconc-config:gnd-uri-from-id`,
+  and the new external-identifier properties resolving against real data) works, using stand-ins
+  deliberately different from the shipped defaults where relevant.
+- The Cypress suite also covers a misspelled single-token query still finding its match with a
+  nonzero score, a batched query returning identical candidates to the same query sent alone (the
+  batch-pool refactor doesn't change results), and the new `gnd`/`geonames`/`wikidata`/`occupation`
+  extend properties resolving against real entities — including the `"gnd"` property defined on both
+  `"person"` and `"work"` resolving against whichever type the requested entity actually is.

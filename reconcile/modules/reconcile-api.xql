@@ -62,6 +62,30 @@ declare %private function reconc:label($entity as element(), $type-id as xs:stri
     return normalize-space(string-join(for $r in $raw return string($r), " "))
 };
 
+(:~ Every name-variant string worth matching a query against for an entity, per its
+ : type's optional "labels" (plural) extractor. Falls back to a single-element
+ : sequence containing just reconc:label(...) when no "labels" extractor is
+ : configured (or it produces nothing usable) — so scoring for types that don't set
+ : it (this profile's own "organization"/"work" defaults, or any custom type) is
+ : identical to before "labels" existed. :)
+declare %private function reconc:labels($entity as element(), $type-id as xs:string) as xs:string* {
+    let $labels-def := $reconc-config:TYPES?($type-id)?labels
+    let $variants :=
+        if (exists($labels-def)) then
+            let $extractor := reconc:resolve-extractor($labels-def)
+            for $r in $extractor($entity)
+            let $s := normalize-space(string($r))
+            where $s != ""
+            return $s
+        else
+            ()
+    return
+        if (exists($variants)) then
+            $variants
+        else
+            (reconc:label($entity, $type-id))
+};
+
 declare %private function reconc:normalize-text($s as xs:string?) as xs:string {
     lower-case(normalize-space($s))
 };
@@ -76,21 +100,87 @@ declare %private function reconc:normalize-types($type) as xs:string* {
         $type
 };
 
-(:~ Find and score candidates for a query string, restricted to the given type ids (all default types if empty). :)
-declare %private function reconc:candidates($type-ids as xs:string*, $query as xs:string?, $limit as xs:integer) as map(*)* {
+(:~ Pre-filters a type's entities via its configured "fulltext-search" closure
+ : (see reconcile-config.xql's doc for that field) so only plausible candidates
+ : reach the (much more expensive, per-candidate) scoring in reconc:candidates. An
+ : empty/blank query can't be turned into a useful Lucene query, so it falls back
+ : to every entity of the type — harmless, since an empty query scores 0 against
+ : everything anyway and gets filtered out downstream. :)
+declare %private function reconc:fulltext-prefilter($type-def as map(*), $query as xs:string?) as element()* {
+    if (normalize-space($query) eq "") then
+        ($type-def?entities)()
+    else
+        ($type-def?fulltext-search)($query)
+};
+
+(:~ {id, label, labels} for a single matched entity — the per-entity data
+ : reconc:candidates actually scores against, however the entity was found
+ : (full scan, Lucene pre-filter, or a precomputed batch pool). :)
+declare %private function reconc:candidate-entry($entity as element(), $type-id as xs:string) as map(*) {
+    map {
+        "id": $entity/@xml:id/string(),
+        "label": reconc:label($entity, $type-id),
+        "labels": reconc:labels($entity, $type-id)
+    }
+};
+
+(:~ {id, label, labels} for every entity of a type — the expensive part of
+ : full-scan matching (reading the whole collection, extracting every name
+ : variant) computed once so a batch request can reuse it across queries instead
+ : of redoing it per query (see reconc:candidate-pool). Also used directly by
+ : reconc:candidates for a single, unpooled query against a type with no
+ : "fulltext-search" (where there's no cheaper way to narrow the candidate set). :)
+declare %private function reconc:label-pool-for-type($type-id as xs:string) as map(*)* {
+    for $e in reconc:entities($type-id)
+    return reconc:candidate-entry($e, $type-id)
+};
+
+(:~ Builds a batch-wide pool (type id -> reconc:label-pool-for-type's result) for
+ : every given type that does *not* have a "fulltext-search" configured — those
+ : types have no cheaper way to narrow candidates than a full scan, so it's worth
+ : precomputing once per request rather than once per query in the batch. Types
+ : *with* a "fulltext-search" are deliberately left out: reconc:fulltext-prefilter
+ : is a cheap, indexed, per-query-text lookup, so there's nothing to usefully
+ : precompute for them ahead of knowing each query's text. Called once per batch
+ : request (reconc:reconcile-1.0/0.2), not once per query. :)
+declare %private function reconc:candidate-pool($type-ids as xs:string*) as map(*) {
+    map:merge(
+        for $type-id in $type-ids
+        let $type-def := $reconc-config:TYPES?($type-id)
+        where exists($type-def) and empty($type-def?fulltext-search)
+        return map:entry($type-id, reconc:label-pool-for-type($type-id))
+    )
+};
+
+(:~ Find and score candidates for a query string, restricted to the given type ids
+ : (all default types if empty). $pool optionally supplies precomputed candidate
+ : entries for one or more types (see reconc:candidate-pool) — a type missing from
+ : $pool (including every type, when $pool is the default map {}) is always
+ : resolved fresh here, via its "fulltext-search" pre-filter if it has one, or a
+ : full scan otherwise. This is what makes $pool purely a batch-request
+ : optimization, never a correctness requirement: single-query callers (e.g.
+ : reconc:suggest-entity) simply don't pass one. :)
+declare %private function reconc:candidates($type-ids as xs:string*, $query as xs:string?, $limit as xs:integer, $pool as map(*)) as map(*)* {
     let $types := if (empty($type-ids)) then map:keys($reconc-config:TYPES) else $type-ids
     let $scored :=
         for $type-id in $types
         let $type-def := $reconc-config:TYPES?($type-id)
         where exists($type-def)
-        for $entity in ($type-def?entities)()
-        let $label := reconc:label($entity, $type-id)
-        let $score := ($reconc-config:SCORE)($label, $query)
+        let $entries :=
+            if (map:contains($pool, $type-id)) then
+                $pool($type-id)
+            else if (exists($type-def?fulltext-search)) then
+                for $e in reconc:fulltext-prefilter($type-def, $query)
+                return reconc:candidate-entry($e, $type-id)
+            else
+                reconc:label-pool-for-type($type-id)
+        for $entry in $entries
+        let $score := max(for $l in $entry?labels return ($reconc-config:SCORE)($l, $query))
         where $score > 0
         return
             map {
-                "id": $entity/@xml:id/string(),
-                "name": $label,
+                "id": $entry?id,
+                "name": $entry?label,
                 "type-id": $type-id,
                 "score": $score
             }
@@ -222,16 +312,35 @@ declare %private function reconc:query-text-from-conditions($query as map(*)) as
             $value
 };
 
+(:~ All type ids a batch of queries could touch — each query's own "type"
+ : restriction if given, or every default type for a query that doesn't restrict
+ : type at all (matching reconc:candidates' own "empty means all types" rule) —
+ : used to build the batch-wide candidate pool once up front (see
+ : reconc:candidate-pool) rather than per query. Each query's own type list is
+ : passed wrapped in an array; a plain "for $types in ...return $types" here would
+ : flatten every query's types into one undifferentiated sequence, since a FLWOR
+ : return of a sequence-valued expression flattens — the array keeps them apart
+ : until unboxed with "?*" below (this is only needed for gathering the pool's type
+ : set, not for reconc:candidates itself, which already accepts a plain sequence). :)
+declare %private function reconc:all-queried-types($type-restrictions as array(*)*) as xs:string* {
+    distinct-values(
+        for $types in $type-restrictions
+        let $ids := $types?*
+        return if (empty($ids)) then map:keys($reconc-config:TYPES) else $ids
+    )
+};
+
 declare %private function reconc:reconcile-1.0($body as map(*)) as map(*) {
     let $queries := $body?queries?*
+    let $per-query-types := for $query in $queries return array { reconc:normalize-types($query?type) }
+    let $pool := reconc:candidate-pool(reconc:all-queried-types($per-query-types))
     return
         map {
             "results": array {
-                for $query in $queries
+                for $query at $i in $queries
                 let $text := reconc:query-text-from-conditions($query)
                 let $limit := ($query?limit, 10)[1]
-                let $types := reconc:normalize-types($query?type)
-                let $candidates := reconc:candidates($types, $text, $limit)
+                let $candidates := reconc:candidates($per-query-types[$i]?*, $text, $limit, $pool)
                 return
                     map {
                         "candidates": array { for $c in $candidates return reconc:format-candidate($c) }
@@ -241,18 +350,21 @@ declare %private function reconc:reconcile-1.0($body as map(*)) as map(*) {
 };
 
 declare %private function reconc:reconcile-0.2($query-map as map(*)) as map(*) {
-    map:merge(
-        for $key in map:keys($query-map)
-        let $query := $query-map($key)
-        let $text := $query?query
-        let $limit := ($query?limit, 10)[1]
-        let $types := reconc:normalize-types($query?type)
-        let $candidates := reconc:candidates($types, $text, $limit)
-        return
-            map:entry($key, map {
-                "result": array { for $c in $candidates return reconc:format-candidate($c) }
-            })
-    )
+    let $keys := map:keys($query-map)
+    let $per-query-types := for $key in $keys return array { reconc:normalize-types($query-map($key)?type) }
+    let $pool := reconc:candidate-pool(reconc:all-queried-types($per-query-types))
+    return
+        map:merge(
+            for $key at $i in $keys
+            let $query := $query-map($key)
+            let $text := $query?query
+            let $limit := ($query?limit, 10)[1]
+            let $candidates := reconc:candidates($per-query-types[$i]?*, $text, $limit, $pool)
+            return
+                map:entry($key, map {
+                    "result": array { for $c in $candidates return reconc:format-candidate($c) }
+                })
+        )
 };
 
 (:~
@@ -291,7 +403,7 @@ declare function reconc:suggest-entity($request as map(*)) {
     let $prefix := $request?parameters?prefix
     let $types := reconc:normalize-types($request?parameters?type)
     let $limit := ($request?parameters?limit, 10)[1]
-    let $candidates := reconc:candidates($types, $prefix, $limit)
+    let $candidates := reconc:candidates($types, $prefix, $limit, map {})
     return
         map {
             "result": array {
@@ -441,7 +553,13 @@ declare %private function reconc:extend-response($query as map(*), $version as x
     }
     let $value-for := function($id as xs:string, $prop-id as xs:string) as xs:string* {
         let $found := reconc:entity-by-id($id)
-        let $prop-def := reconc:property-by-id($prop-id)
+        (: Scoped to the entity's own type, not reconc:property-by-id's global lookup:
+         : property ids only need to be unique *within* a type (see reconcile-config.xql's
+         : doc comment) — the shipped defaults now reuse "gnd" for both "person" and
+         : "work", each with a different extractor, so picking a property definition
+         : without knowing which type the entity actually is would silently apply the
+         : wrong one whenever two types share a property id. :)
+        let $prop-def := if (exists($found)) then head(reconc:properties-for-type($found?type-id)[?id = $prop-id]) else ()
         return
             if (exists($found) and exists($prop-def)) then
                 let $extractor := reconc:resolve-extractor($prop-def?value)

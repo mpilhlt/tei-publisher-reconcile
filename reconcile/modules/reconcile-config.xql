@@ -43,11 +43,44 @@ xquery version "3.1";
  :                   context — which collection, relative to what — is inherently
  :                   ambiguous for a bare selection XPath, so a closure is both
  :                   clearer and no more work to write.
- :   label         - the human-readable label for a matched entity. Either a
- :                   function($entity as element()) as xs:string, or an xs:string
- :                   containing an XPath expression evaluated with the entity as
- :                   context (e.g. ".//tei:persName[@type='main'][1]") — see
- :                   reconc:resolve-extractor in reconcile-api.xql.
+ :   label         - the human-readable label for a matched entity: what's returned
+ :                   as candidate.name and used for /entity/{id}'s "view" redirect.
+ :                   Either a function($entity as element()) as xs:string, or an
+ :                   xs:string containing an XPath expression evaluated with the
+ :                   entity as context (e.g. ".//tei:persName[@type='main'][1]") —
+ :                   see reconc:resolve-extractor in reconcile-api.xql.
+ :   labels        - (optional) every name *variant* worth matching against for this
+ :                   type — function($entity as element()) as xs:string*, or an
+ :                   xs:string XPath (same rules as "label", but expected to select
+ :                   more than one node). Scoring uses the best match across all of
+ :                   them; the response's displayed name still always comes from the
+ :                   single "label" above. Omit if a type only ever has one name form
+ :                   (matching then just uses "label" alone, unchanged) — not every
+ :                   type benefits: e.g. this profile's own "work"/"organization"
+ :                   defaults don't set it, because the demo data backing them never
+ :                   has more than one title/name to begin with.
+ :   fulltext-search - (optional) function($query as xs:string) as element()* — like
+ :                   "entities", but pre-filtered by $query against a Lucene text
+ :                   field already indexed in the app's collection.xconf (e.g.
+ :                   "name"), so a large collection doesn't need scoring entity by
+ :                   entity. This has to be its own closure rather than reconc:candidates
+ :                   filtering "entities"'s result by ft:query() afterwards: eXist
+ :                   only rewrites ft:query() into an actual index lookup when it's
+ :                   a predicate *inside* the same path expression doing the
+ :                   collection traversal — applying it to an already-materialized
+ :                   node sequence still runs, but ~300x slower in testing against
+ :                   this project's demo data (955ms vs. 3ms for the same 33-entity
+ :                   collection), because it loses the index and falls back to a
+ :                   per-node check. So write the ft:query() predicate directly into
+ :                   your own path expression, the same way "entities" is written —
+ :                   reconc-fulltext:fuzzy-query($field, $query) (imported below)
+ :                   builds a fuzzy ("~") Lucene query string for you; see the
+ :                   shipped "person"/"place"/"work" defaults for the exact pattern
+ :                   to copy. Leaving this field unset (the safe default) falls back
+ :                   to scoring every entity individually via "entities" — slower,
+ :                   but always correct regardless of indexing, so this is purely
+ :                   opt-in. "organization" is deliberately left unset: its tei:org
+ :                   elements aren't indexed by the shipped collection.xconf at all.
  :   preview-mode  - (optional) the ODD web-transform mode used to render this
  :                   type's default HTML preview (GET /api/reconcile/preview and the
  :                   /entity/{id} fallback). Defaults to "register-overview" — the
@@ -65,6 +98,7 @@ module namespace reconc-config = "http://teipublisher.com/api/reconcile/config";
 
 import module namespace config = "http://www.tei-c.org/tei-simple/config" at "config.xqm";
 import module namespace reconc-score = "http://teipublisher.com/api/reconcile/scoring" at "reconcile-scoring.xql";
+import module namespace reconc-fulltext = "http://teipublisher.com/api/reconcile/fulltext" at "reconcile-fulltext.xql";
 
 declare namespace tei = "http://www.tei-c.org/ns/1.0";
 
@@ -83,6 +117,19 @@ declare function reconc-config:profile-installed($name as xs:string) as xs:boole
         $name = $ctx?profiles?*
 };
 
+(:~ Converts a "gnd-<id>"-shaped local identifier (the convention this demo data
+ : uses both for some persons' @xml:id, e.g. "gnd-119442086", and for works'
+ : tei:idno[@type='GND'], e.g. "gnd-4211173-0") into a real, resolvable GND URI.
+ : Returns the empty sequence for anything not in that shape (most entities aren't
+ : GND-sourced at all, which is normal — extend properties are allowed to be
+ : absent). Shared by the "person" and "work" defaults below. :)
+declare function reconc-config:gnd-uri-from-id($id as xs:string?) as xs:string? {
+    if (exists($id) and starts-with($id, "gnd-")) then
+        "https://d-nb.info/gnd/" || substring-after($id, "gnd-")
+    else
+        ()
+};
+
 declare variable $reconc-config:TYPES := map {
     "person": map {
         "name": "Person",
@@ -93,10 +140,20 @@ declare variable $reconc-config:TYPES := map {
         "label": function($e as element()) as xs:string {
             normalize-space(($e/tei:persName[@type = "main"], $e/tei:persName, $e)[1])
         },
+        "labels": function($e as element()) as xs:string* {
+            $e/tei:persName/string()
+        },
+        "fulltext-search": function($query as xs:string) as element()* {
+            collection($config:register-root)/id($config:register-map?person?id)//tei:person[
+                @xml:id and ft:query(., reconc-fulltext:fuzzy-query("name", $query), map { "leading-wildcard": "yes", "filter-rewrite": "yes" })
+            ]
+        },
         "preview-mode": "register-overview",
         "properties": map {
             "gender": map { "name": "Gender", "value": function($e as element()) as xs:string* { normalize-space($e/tei:gender[1]) } },
-            "note": map { "name": "Biographical note", "value": function($e as element()) as xs:string* { normalize-space($e/tei:note[1]) } }
+            "note": map { "name": "Biographical note", "value": function($e as element()) as xs:string* { normalize-space($e/tei:note[1]) } },
+            "occupation": map { "name": "Occupation", "value": function($e as element()) as xs:string* { $e/tei:occupation/string() } },
+            "gnd": map { "name": "GND identifier", "value": function($e as element()) as xs:string* { reconc-config:gnd-uri-from-id($e/@xml:id/string()) } }
         }
     },
     "place": map {
@@ -108,10 +165,20 @@ declare variable $reconc-config:TYPES := map {
         "label": function($e as element()) as xs:string {
             normalize-space(($e/tei:placeName[@type = "main"], $e/tei:placeName, $e)[1])
         },
+        "labels": function($e as element()) as xs:string* {
+            $e/tei:placeName/string()
+        },
+        "fulltext-search": function($query as xs:string) as element()* {
+            collection($config:register-root)/id($config:register-map?place?id)//tei:place[
+                @xml:id and ft:query(., reconc-fulltext:fuzzy-query("name", $query), map { "leading-wildcard": "yes", "filter-rewrite": "yes" })
+            ]
+        },
         "preview-mode": "register-overview",
         "properties": map {
             "geo": map { "name": "Coordinates", "value": function($e as element()) as xs:string* { normalize-space($e/tei:location/tei:geo[1]) } },
-            "type": map { "name": "Place type", "value": function($e as element()) as xs:string* { $e/@type/string() } }
+            "type": map { "name": "Place type", "value": function($e as element()) as xs:string* { $e/@type/string() } },
+            "geonames": map { "name": "GeoNames identifier", "value": function($e as element()) as xs:string* { $e/tei:ptr[@type = "geonames"]/@target/string() } },
+            "wikidata": map { "name": "Wikidata identifier", "value": function($e as element()) as xs:string* { $e/tei:ptr[@type = "wikidata"]/@target/string() } }
         }
     },
     "organization": map {
@@ -133,9 +200,15 @@ declare variable $reconc-config:TYPES := map {
         "label": function($e as element()) as xs:string {
             normalize-space(($e/tei:title[@type = "main"], $e/tei:title, $e)[1])
         },
+        "fulltext-search": function($query as xs:string) as element()* {
+            collection($config:register-root)/id($config:register-map?work?id)//tei:bibl[
+                @xml:id and ft:query(., reconc-fulltext:fuzzy-query("name", $query), map { "leading-wildcard": "yes", "filter-rewrite": "yes" })
+            ]
+        },
         "preview-mode": "register-overview",
         "properties": map {
-            "author": map { "name": "Author", "value": function($e as element()) as xs:string* { normalize-space($e/tei:author[1]) } }
+            "author": map { "name": "Author", "value": function($e as element()) as xs:string* { normalize-space($e/tei:author[1]) } },
+            "gnd": map { "name": "GND identifier", "value": function($e as element()) as xs:string* { reconc-config:gnd-uri-from-id($e/tei:idno[@type = "GND"]/string()) } }
         }
     }
 };

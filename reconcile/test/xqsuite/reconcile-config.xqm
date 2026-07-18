@@ -102,3 +102,93 @@ declare
 function t:profile-installed-false-for-absent-profile() {
     reconc-config:profile-installed("definitely-not-a-real-profile-xyz")
 };
+
+(:~ reconc-score:default's edit-distance tier: a one-transposition typo scores
+ : strictly between "no match" (0) and "exact match" (100) — this is what lets a
+ : Lucene fuzzy pre-filter match (see reconcile-api.xql's reconc:fulltext-prefilter)
+ : actually surface a ranked, nonzero-scored candidate instead of being silently
+ : dropped by reconc:candidates' score>0 filter. :)
+declare
+    %test:assertTrue
+function t:fuzzy-score-typo-is-between-no-match-and-exact() {
+    let $score := reconc-score:default("Goethe", "Goehte")
+    return $score gt 0 and $score lt 100
+};
+
+(:~ ...and the same holds for a typo in just one word of a realistic multi-word
+ : label — this is the case that actually occurs in this profile's own demo data
+ : (person labels like "Goethe, Johann Wolfgang von (1749-1832)"), and specifically
+ : what regressed during development: a whole-string edit distance is essentially
+ : never small enough to qualify once a label has more than a couple of words, so
+ : the scorer has to compare token-by-token, not just the full strings. :)
+declare
+    %test:assertTrue
+function t:fuzzy-score-typo-in-one-word-of-a-multiword-label() {
+    let $score := reconc-score:default("Goethe, Johann Wolfgang von (1749-1832)", "Goehte")
+    return $score gt 0 and $score lt 100
+};
+
+(:~ Completely unrelated strings of similar length must still score 0 — the fuzzy
+ : tier is deliberately conservative (short edit distance *and* a minimum token
+ : length) so it doesn't turn "no match" into a false positive. :)
+declare
+    %test:assertEquals(0)
+function t:fuzzy-score-does-not-fire-for-unrelated-words() {
+    reconc-score:default("Madrid", "Berlin")
+};
+
+(:~ The "labels" (plural) extractor is used for matching but never for display: a
+ : type's shipped "person" default has a "labels" set (every persName variant) that
+ : differs from its single "label" (the preferred "main" variant) — scoring against
+ : a variant that ISN'T the primary label should still find a nonzero, sensible
+ : score, proving reconc:labels' fallback-to-[label] behavior (for types without
+ : "labels", exercised implicitly by every other test here) coexists correctly with
+ : real multi-variant matching. Since reconc:labels lives in reconcile-api.xql
+ : (%private, like reconc:resolve-extractor — see that function's own test above
+ : for why), this replicates the *mechanism* directly against the shipped config's
+ : own "labels" function rather than re-importing something intentionally private. :)
+declare
+    %test:assertTrue
+function t:labels-extractor-covers-name-variants-beyond-the-primary-label() {
+    let $type-def := $reconc-config:TYPES?person
+    let $entities := ($type-def?entities)()
+    let $with-variants := $entities[count(($type-def?labels)(.)) gt 1][1]
+    return
+        exists($with-variants) and
+        (
+            let $label := ($type-def?label)($with-variants)
+            let $variants := ($type-def?labels)($with-variants)
+            return some $v in $variants satisfies $v != $label
+        )
+};
+
+(:~ reconc-config:gnd-uri-from-id converts the "gnd-<id>" shape this demo data uses
+ : (both in some persons' @xml:id and in works' idno[@type='GND']) into a real,
+ : resolvable GND URI, and returns nothing for ids that aren't in that shape (most
+ : entities aren't GND-sourced at all — that has to be a non-error, "absent"
+ : outcome, not a wrong guess). :)
+declare
+    %test:assertEquals("https://d-nb.info/gnd/119442086", "")
+function t:gnd-uri-from-id-converts-known-shape-and-ignores-others() {
+    (
+        reconc-config:gnd-uri-from-id("gnd-119442086"),
+        (reconc-config:gnd-uri-from-id("kbga-actors-136"), "")[1]
+    )
+};
+
+(:~ The new external-identifier extend properties resolve against real register
+ : data for at least one entity each — proves they're wired up correctly, not just
+ : syntactically valid (same spirit as t:default-types-have-entities-and-labels). :)
+declare
+    %test:assertTrue
+function t:external-identifier-properties-resolve-against-real-data() {
+    let $person-gnd := $reconc-config:TYPES?person?properties?gnd?value
+    let $person-occupation := $reconc-config:TYPES?person?properties?occupation?value
+    let $place-geonames := $reconc-config:TYPES?place?properties?geonames?value
+    let $work-gnd := $reconc-config:TYPES?work?properties?gnd?value
+    return
+        (some $e in ($reconc-config:TYPES?person?entities)() satisfies exists($person-gnd($e)))
+        and (some $e in ($reconc-config:TYPES?person?entities)() satisfies exists($person-occupation($e)))
+        and (some $e in ($reconc-config:TYPES?place?entities)() satisfies exists($place-geonames($e)))
+        and (some $e in ($reconc-config:TYPES?work?entities)() satisfies exists($work-gnd($e)))
+};

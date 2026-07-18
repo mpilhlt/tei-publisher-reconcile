@@ -107,6 +107,50 @@ describe('reconciliation API (0.2, ?version=0.2 manifest)', () => {
   })
 })
 
+describe('fuzzy / typo-tolerant matching', () => {
+  let resultSchema
+
+  before(() => {
+    cy.fixture('schemas/1.0/reconciliation-result-batch.json').then((s) => { resultSchema = s })
+  })
+
+  it('a misspelled single-token query still finds the right person, with a nonzero score', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/match',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries: [{ type: 'person', conditions: [{ matchType: 'name', propertyValue: 'Goehte' }] }] },
+    })
+      .validateSchema(resultSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        const candidates = body.results[0].candidates
+        expect(candidates).to.be.an('array').that.is.not.empty
+        expect(candidates[0].id).to.eq('kbga-actors-136')
+        expect(candidates[0].score).to.be.greaterThan(0)
+      })
+  })
+
+  it('a batched query returns the same candidates as the same query sent alone (pooling does not change results)', () => {
+    const query = { type: 'person', conditions: [{ matchType: 'name', propertyValue: 'Goethe' }] }
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/match',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries: [query] },
+    }).then(({ body: alone }) => {
+      cy.api({
+        method: 'POST',
+        url: '/api/reconcile/match',
+        headers: { 'Content-Type': 'application/json' },
+        body: { queries: [query, { type: 'place', conditions: [{ matchType: 'name', propertyValue: 'Madrid' }] }] },
+      }).then(({ body: batched }) => {
+        expect(batched.results[0].candidates).to.deep.equal(alone.results[0].candidates)
+      })
+    })
+  })
+})
+
 describe('suggest services (shape shared by 0.2 and 1.0-draft)', () => {
   let entitySchema
   let propertySchema
@@ -206,6 +250,54 @@ describe('data extension (1.0-draft)', () => {
         expect(status).to.eq(200)
         expect(body.properties.map((p) => p.id)).to.include('gender')
       })
+  })
+
+  it('POST /extend resolves external-identifier properties (gnd, occupation) for a GND-sourced person', () => {
+    const query = { ids: ['gnd-119442086'], properties: [{ id: 'gnd' }, { id: 'occupation' }] }
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/extend',
+      headers: { 'Content-Type': 'application/json' },
+      body: query,
+    })
+      .validateSchema(responseSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        const [gnd, occupation] = body.rows[0].properties
+        expect(gnd.values[0].str).to.eq('https://d-nb.info/gnd/119442086')
+        expect(occupation.values.map((v) => v.str)).to.include('Bischof')
+      })
+  })
+
+  it('POST /extend resolves geonames/wikidata properties for a place, and a work\'s gnd property is scoped independently from a person\'s', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/extend',
+      headers: { 'Content-Type': 'application/json' },
+      body: { ids: ['dantiscus-0000001'], properties: [{ id: 'geonames' }, { id: 'wikidata' }] },
+    })
+      .validateSchema(responseSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        const [geonames, wikidata] = body.rows[0].properties
+        expect(geonames.values[0].str).to.match(/^https:\/\/www\.geonames\.org\//)
+        expect(wikidata.values[0].str).to.match(/^https:\/\/www\.wikidata\.org\//)
+      })
+
+    // "gnd" is defined on both "person" and "work" with different extractors (idno
+    // vs @xml:id) — this must resolve against the entity's own actual type, not
+    // whichever type happens to define "gnd" first (a real bug caught during
+    // development: reconc:property-by-id's global-by-id lookup picked the wrong
+    // type's extractor).
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/extend',
+      headers: { 'Content-Type': 'application/json' },
+      body: { ids: ['gnd-4211173-0'], properties: [{ id: 'gnd' }] },
+    })
+      .validateSchema(responseSchema)
+      .its('body.rows.0.properties.0.values.0.str')
+      .should('eq', 'https://d-nb.info/gnd/4211173-0')
   })
 })
 
