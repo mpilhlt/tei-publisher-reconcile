@@ -18,7 +18,9 @@ pre-filter candidates through a Lucene full-text index for speed on larger colle
 demo app to validate one against. `person`/`place` additionally match against every name *variant*
 an entity has, not just its primary display name (see `"labels"` below), and all four types expose
 a few real external-identifier extend properties (GND for person/work, GeoNames/Wikidata for place)
-alongside their original ones.
+alongside their original ones — which, in turn, can also be used as *match* conditions in a
+reconciliation query, not just fetched via `/extend` (see "Matching on more than just a name"
+below).
 
 This profile only `depends` on `base10`. The **`registers` profile** (the one that adds the
 `/people`, `/places`, ... browse pages) is entirely optional: if it's installed, `GET
@@ -200,6 +202,61 @@ a multi-word name like "Goethe, Johann Wolfgang von" would rarely be within edit
 `"fulltext-search"`'s Lucene-level fuzzy recall actually useful: without it, a fuzzy-matched
 candidate would still score 0 and get silently dropped by `reconc:candidates`.
 
+### Matching on more than just a name
+
+A reconciliation query isn't always just a name. Both spec versions let a client also send
+*property* conditions (disambiguate/refine candidates using another known value, e.g. "and gender
+is male") and 1.0-draft additionally allows *id* conditions (match directly against a known entity
+id) — and a query can legally have **no name condition at all**, reconciling purely by a known
+property value (the spec's own example: reconciling by a `uid` property with no name text
+whatsoever). This is exactly the mechanism OpenRefine's "reconcile more columns as properties"
+feature relies on. No new config is needed for this — every existing `"properties"` entry (the same
+ones already driving `/extend`) doubles as a match condition input, since its `"value"` extractor is
+exactly what's needed to read a candidate's actual value and compare it against what the client
+asked for.
+
+```json
+{
+  "conditions": [
+    { "matchType": "name", "propertyValue": "Goethe" },
+    { "matchType": "property", "propertyId": "gender", "propertyValue": "male", "required": true, "matchQualifier": "ExactMatch" }
+  ]
+}
+```
+
+How a condition affects a candidate:
+
+- **`required: true`** (1.0-draft only; every 0.2 property condition is always optional) — a
+  candidate that doesn't satisfy this condition is dropped entirely, regardless of its name score or
+  any other condition. **`required: false`/absent** — a matching condition adds a flat score boost
+  (capped at 100 total) instead; a non-matching optional condition simply doesn't boost, it never
+  excludes.
+- **`matchQualifier`** decides how a value is compared: `"ExactMatch"` — exact string equality;
+  `"WildcardMatch"` — a glob pattern, `*` standing for any run of characters (e.g. `"Politik*"`);
+  anything else, including no qualifier at all (always the case for 0.2), falls back to a
+  case-insensitive exact-or-substring match — the same "good enough default" spirit as the name
+  scorer's non-fuzzy tiers.
+- **`matchQuantifier`** (1.0-draft only, when `propertyValue` is an array of values) — `"any"`: at
+  least one of them has to match; `"all"`: every one of them has to; `"none"`: none of them may.
+  Defaults to `"any"`.
+- A **`matchType: "id"`** condition looks the requested id(s) up directly (`reconc:entity-by-id`) —
+  no name or property scan needed — and scores 100 if found, before any property conditions are
+  applied on top.
+- A query with only property conditions (no name, no id) is answered with a full scan of the
+  applicable type(s) — there's no index over arbitrary properties, only over the name field (see
+  `"fulltext-search"` above) — so this is correct but not fast for a large collection.
+
+This logic lives in `modules/reconcile-conditions.xql` (the `reconc-cond:normalize-1.0`/
+`normalize-0.2`/`evaluate`/`matches-value` functions), not `reconcile-config.xql` — there is nothing
+to configure here beyond the `"properties"` you've likely already defined for `/extend`. A few
+things this deliberately does *not* attempt: `matchQuantifier`/`required` on an `"id"` condition
+(id lookups always mean "any of these ids"); 0.2's `type_strict: "all"` (moot given this profile's
+one-type-per-entity model — no candidate could ever belong to more than one type); `lang`/`dir`
+-scoped conditions (evaluated language-agnostically regardless); and the boost amount is a flat,
+hardcoded constant per matched optional condition, not proportional to match quality or
+configurable — good enough to make required filtering and property-only queries genuinely useful,
+not a tuned scoring model.
+
 ### Preview rendering
 
 By default, `/preview` and the `/entity/{id}` fallback (used when a type has no `"view"` page) run
@@ -253,3 +310,11 @@ lookup, so there's nothing to usefully precompute ahead of knowing each query's 
   batch-pool refactor doesn't change results), and the new `gnd`/`geonames`/`wikidata`/`occupation`
   extend properties resolving against real entities — including the `"gnd"` property defined on both
   `"person"` and `"work"` resolving against whichever type the requested entity actually is.
+- `test/xqsuite/reconcile-conditions.xqm` — layer-1 unit tests for
+  `reconc-cond:normalize-1.0`/`normalize-0.2`/`evaluate`/`matches-value`, modeled directly on the
+  real spec fixtures in `reconc-specs/{0.2,1.0-draft}/examples/reconciliation-query-batch/valid/`.
+  The Cypress suite covers the end-to-end HTTP behavior against this profile's own real demo data: a
+  required property condition excluding a same-named non-match, the same condition matching and
+  boosting instead, a direct `matchType: "id"` lookup, a property-only query with no name condition
+  at all finding an entity purely by its `gnd` property (mirroring the spec's own "no query string"
+  example), and the same behavior via 0.2's flatter `"properties"` array.

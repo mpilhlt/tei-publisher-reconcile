@@ -5,6 +5,7 @@ module namespace reconc="http://teipublisher.com/api/reconcile";
 import module namespace config="http://www.tei-c.org/tei-simple/config" at "config.xqm";
 import module namespace pm-config="http://www.tei-c.org/tei-simple/pm-config" at "pm-config.xql";
 import module namespace reconc-config="http://teipublisher.com/api/reconcile/config" at "reconcile-config.xql";
+import module namespace reconc-cond="http://teipublisher.com/api/reconcile/conditions" at "reconcile-conditions.xql";
 import module namespace router="http://e-editiones.org/roaster";
 import module namespace errors="http://e-editiones.org/roaster/errors";
 
@@ -15,24 +16,9 @@ declare namespace tei="http://www.tei-c.org/ns/1.0";
  : redefine a type, or swap the matching/ranking algorithm ($reconc-config:SCORE). This
  : module only implements the HTTP-facing reconciliation protocol on top of it. :)
 
-(:~ Resolves a "label"/property "value" config entry to a callable extractor.
- : Config values may be a function item (called as-is), or an xs:string containing
- : a *relative* XPath expression (e.g. ".", ".//tei:persName[1]", "@type") evaluated
- : against the entity via util:eval — the entity is bound as $data and the string
- : is appended as a path step ("($data)/" || $xpath), so util:eval's dynamic context
- : inherits this module's `tei` namespace declaration and the $data binding. A
- : parenthesized "($data)/" prefix (rather than bare "$data" concatenation) avoids
- : the XPath expression's first token being lexed as part of the variable reference
- : itself (e.g. "$data" || "." would otherwise parse as the single token "$data.").
- : See reconcile/doc/README.md for the tradeoffs. :)
-declare %private function reconc:resolve-extractor($value) as function(*) {
-    if ($value instance of function(*)) then
-        $value
-    else
-        function($data as item()*) as item()* {
-            util:eval("($data)/" || $value)
-        }
-};
+(:~ Config-value-to-extractor resolution (function item or XPath string) lives in
+ : reconc-cond:resolve-extractor (reconcile-conditions.xql) — needed there too, for
+ : evaluating property match conditions, and this module already imports that one. :)
 
 (:~ All registered entities for a reconciliation type id, e.g. "person". :)
 declare %private function reconc:entities($type-id as xs:string) as element()* {
@@ -57,7 +43,7 @@ declare %private function reconc:entity-by-id($id as xs:string) as map(*)? {
 
 (:~ Human-readable label for a matched entity, per its type's configured "label" extractor. :)
 declare %private function reconc:label($entity as element(), $type-id as xs:string) as xs:string {
-    let $extractor := reconc:resolve-extractor($reconc-config:TYPES?($type-id)?label)
+    let $extractor := reconc-cond:resolve-extractor($reconc-config:TYPES?($type-id)?label)
     let $raw := $extractor($entity)
     return normalize-space(string-join(for $r in $raw return string($r), " "))
 };
@@ -72,7 +58,7 @@ declare %private function reconc:labels($entity as element(), $type-id as xs:str
     let $labels-def := $reconc-config:TYPES?($type-id)?labels
     let $variants :=
         if (exists($labels-def)) then
-            let $extractor := reconc:resolve-extractor($labels-def)
+            let $extractor := reconc-cond:resolve-extractor($labels-def)
             for $r in $extractor($entity)
             let $s := normalize-space(string($r))
             where $s != ""
@@ -113,14 +99,17 @@ declare %private function reconc:fulltext-prefilter($type-def as map(*), $query 
         ($type-def?fulltext-search)($query)
 };
 
-(:~ {id, label, labels} for a single matched entity — the per-entity data
- : reconc:candidates actually scores against, however the entity was found
- : (full scan, Lucene pre-filter, or a precomputed batch pool). :)
+(:~ {id, label, labels, entity} for a single matched entity — the per-entity data
+ : reconc:candidates actually scores against, however the entity was found (full
+ : scan, Lucene pre-filter, or a precomputed batch pool). "entity" is the node
+ : itself, needed to evaluate property match conditions (reconc-cond:evaluate) —
+ : "id"/"label"/"labels" alone were enough before conditions existed. :)
 declare %private function reconc:candidate-entry($entity as element(), $type-id as xs:string) as map(*) {
     map {
         "id": $entity/@xml:id/string(),
         "label": reconc:label($entity, $type-id),
-        "labels": reconc:labels($entity, $type-id)
+        "labels": reconc:labels($entity, $type-id),
+        "entity": $entity
     }
 };
 
@@ -152,30 +141,82 @@ declare %private function reconc:candidate-pool($type-ids as xs:string*) as map(
     )
 };
 
-(:~ Find and score candidates for a query string, restricted to the given type ids
- : (all default types if empty). $pool optionally supplies precomputed candidate
- : entries for one or more types (see reconc:candidate-pool) — a type missing from
- : $pool (including every type, when $pool is the default map {}) is always
- : resolved fresh here, via its "fulltext-search" pre-filter if it has one, or a
- : full scan otherwise. This is what makes $pool purely a batch-request
- : optimization, never a correctness requirement: single-query callers (e.g.
- : reconc:suggest-entity) simply don't pass one. :)
-declare %private function reconc:candidates($type-ids as xs:string*, $query as xs:string?, $limit as xs:integer, $pool as map(*)) as map(*)* {
+(:~ Runs every property condition in $conditions?properties against one candidate
+ : entity, resolving each property's extractor from $type-def?properties (the exact
+ : same "value" extractors already used by /extend) — scoped to *this* candidate's
+ : own type-def, never a global-by-id lookup (see reconc:extend-response's
+ : $value-for for why that matters: two types can define the same property id with
+ : different extractors, e.g. this profile's own "gnd" on both "person" and "work").
+ : A propertyId the type doesn't define resolves to no extractor at all (not a
+ : broken one), so reconc-cond:evaluate correctly treats it as "never matches". :)
+declare %private function reconc:evaluate-property-conditions($type-def as map(*), $entity as element(), $conditions as array(*)) as map(*)* {
+    for $condition in $conditions?*
+    let $prop-def := $type-def?properties?($condition?id)
+    let $extractor := if (exists($prop-def)) then reconc-cond:resolve-extractor($prop-def?value) else ()
+    return reconc-cond:evaluate($extractor, $entity, $condition)
+};
+
+(:~ Find and score candidates for a normalized query descriptor (see
+ : reconc-cond:normalize-1.0/normalize-0.2 — {name, ids, properties}), restricted to
+ : the given type ids (all default types if empty). $pool optionally supplies
+ : precomputed candidate entries for one or more types (see reconc:candidate-pool)
+ : — a type missing from $pool (including every type, when $pool is the default
+ : map {}) is always resolved fresh here. This is what makes $pool purely a
+ : batch-request optimization, never a correctness requirement: single-query
+ : callers (e.g. reconc:suggest-entity) simply don't pass one.
+ :
+ : Candidate *generation* (which entities are even considered) prefers, in order:
+ : (1) $conditions?ids, resolved directly via reconc:entity-by-id — cheap, no scan;
+ : (2) $conditions?name, via the pool / a type's "fulltext-search" pre-filter / a
+ : full scan, exactly as before conditions existed; (3) $conditions?properties
+ : alone (no name, no ids — a query can legally have only property conditions, per
+ : the spec's own "no query string" example) via a full scan, since there is no
+ : index over arbitrary properties, only over the name field.
+ :
+ : Candidate *scoring* is then uniform regardless of how the entity was found: an
+ : id match scores 100, a name match scores via $reconc-config:SCORE, and each
+ : matched property condition adds a flat boost (capped at 100 total) — except a
+ : *required* condition that does NOT match drops the candidate outright,
+ : regardless of any other score component. With no id/property conditions this
+ : reduces to exactly the pre-conditions score (name-score alone, boost 0), so
+ : existing name-only queries are entirely unaffected. :)
+declare %private function reconc:candidates($type-ids as xs:string*, $conditions as map(*), $limit as xs:integer, $pool as map(*)) as map(*)* {
     let $types := if (empty($type-ids)) then map:keys($reconc-config:TYPES) else $type-ids
+    let $name := $conditions?name
+    let $has-name := exists($name) and normalize-space($name) != ""
+    let $id-values := $conditions?ids
+    let $properties := ($conditions?properties, [])[1]
+    let $items :=
+        if (exists($id-values)) then
+            for $id in $id-values
+            let $found := reconc:entity-by-id($id)
+            where exists($found) and $found?type-id = $types
+            return map { "type-id": $found?type-id, "entry": reconc:candidate-entry($found?entity, $found?type-id) }
+        else
+            for $type-id in $types
+            let $type-def := $reconc-config:TYPES?($type-id)
+            where exists($type-def)
+            let $entries :=
+                if (map:contains($pool, $type-id)) then
+                    $pool($type-id)
+                else if ($has-name and exists($type-def?fulltext-search)) then
+                    for $e in reconc:fulltext-prefilter($type-def, $name)
+                    return reconc:candidate-entry($e, $type-id)
+                else
+                    reconc:label-pool-for-type($type-id)
+            for $entry in $entries
+            return map { "type-id": $type-id, "entry": $entry }
     let $scored :=
-        for $type-id in $types
+        for $item in $items
+        let $type-id := $item?type-id
         let $type-def := $reconc-config:TYPES?($type-id)
-        where exists($type-def)
-        let $entries :=
-            if (map:contains($pool, $type-id)) then
-                $pool($type-id)
-            else if (exists($type-def?fulltext-search)) then
-                for $e in reconc:fulltext-prefilter($type-def, $query)
-                return reconc:candidate-entry($e, $type-id)
-            else
-                reconc:label-pool-for-type($type-id)
-        for $entry in $entries
-        let $score := max(for $l in $entry?labels return ($reconc-config:SCORE)($l, $query))
+        let $entry := $item?entry
+        let $name-score := if ($has-name) then max((xs:double(0), for $l in $entry?labels return ($reconc-config:SCORE)($l, $name))) else xs:double(0)
+        let $id-base := if ($entry?id = $id-values) then xs:double(100) else xs:double(0)
+        let $prop-results := reconc:evaluate-property-conditions($type-def, $entry?entity, $properties)
+        where every $pr in $prop-results[?required eq true()] satisfies $pr?matched
+        let $boost := sum(for $pr in $prop-results where $pr?matched return xs:double(20))
+        let $score := min((xs:double(100), max(($name-score, $id-base)) + $boost))
         where $score > 0
         return
             map {
@@ -301,17 +342,6 @@ declare %private function reconc:manifest-response($request as map(*)) {
             }
 };
 
-(:~ Extracts the query text from a 1.0-draft query's conditions (the "name" match condition). :)
-declare %private function reconc:query-text-from-conditions($query as map(*)) as xs:string? {
-    let $condition := $query?conditions?*[?matchType = "name"][1]
-    let $value := $condition?propertyValue
-    return
-        if ($value instance of map(*)) then
-            ($value?name, $value?id)[1]
-        else
-            $value
-};
-
 (:~ All type ids a batch of queries could touch — each query's own "type"
  : restriction if given, or every default type for a query that doesn't restrict
  : type at all (matching reconc:candidates' own "empty means all types" rule) —
@@ -338,9 +368,9 @@ declare %private function reconc:reconcile-1.0($body as map(*)) as map(*) {
         map {
             "results": array {
                 for $query at $i in $queries
-                let $text := reconc:query-text-from-conditions($query)
+                let $conditions := reconc-cond:normalize-1.0($query)
                 let $limit := ($query?limit, 10)[1]
-                let $candidates := reconc:candidates($per-query-types[$i]?*, $text, $limit, $pool)
+                let $candidates := reconc:candidates($per-query-types[$i]?*, $conditions, $limit, $pool)
                 return
                     map {
                         "candidates": array { for $c in $candidates return reconc:format-candidate($c) }
@@ -357,9 +387,9 @@ declare %private function reconc:reconcile-0.2($query-map as map(*)) as map(*) {
         map:merge(
             for $key at $i in $keys
             let $query := $query-map($key)
-            let $text := $query?query
+            let $conditions := reconc-cond:normalize-0.2($query)
             let $limit := ($query?limit, 10)[1]
-            let $candidates := reconc:candidates($per-query-types[$i]?*, $text, $limit, $pool)
+            let $candidates := reconc:candidates($per-query-types[$i]?*, $conditions, $limit, $pool)
             return
                 map:entry($key, map {
                     "result": array { for $c in $candidates return reconc:format-candidate($c) }
@@ -403,7 +433,7 @@ declare function reconc:suggest-entity($request as map(*)) {
     let $prefix := $request?parameters?prefix
     let $types := reconc:normalize-types($request?parameters?type)
     let $limit := ($request?parameters?limit, 10)[1]
-    let $candidates := reconc:candidates($types, $prefix, $limit, map {})
+    let $candidates := reconc:candidates($types, map { "name": $prefix, "ids": (), "properties": [] }, $limit, map {})
     return
         map {
             "result": array {
@@ -562,7 +592,7 @@ declare %private function reconc:extend-response($query as map(*), $version as x
         let $prop-def := if (exists($found)) then head(reconc:properties-for-type($found?type-id)[?id = $prop-id]) else ()
         return
             if (exists($found) and exists($prop-def)) then
-                let $extractor := reconc:resolve-extractor($prop-def?value)
+                let $extractor := reconc-cond:resolve-extractor($prop-def?value)
                 return
                     for $v in $extractor($found?entity)
                     let $s := string($v)

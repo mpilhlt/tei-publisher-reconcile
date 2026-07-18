@@ -53,6 +53,114 @@ describe('reconciliation API (1.0-draft, default manifest)', () => {
   })
 })
 
+describe('matching on non-name query conditions (property/id, both spec versions)', () => {
+  let resultSchema
+
+  before(() => {
+    cy.fixture('schemas/1.0/reconciliation-result-batch.json').then((s) => { resultSchema = s })
+  })
+
+  it('a required property condition that fails excludes a same-named candidate', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/match',
+      headers: { 'Content-Type': 'application/json' },
+      body: {
+        queries: [{
+          type: 'person',
+          conditions: [
+            { matchType: 'name', propertyValue: 'Goethe' },
+            { matchType: 'property', propertyId: 'gender', propertyValue: 'female', required: true, matchQualifier: 'ExactMatch' },
+          ],
+        }],
+      },
+    })
+      .validateSchema(resultSchema)
+      .its('body.results.0.candidates')
+      .should('deep.equal', [])
+  })
+
+  it('...but the same required condition, when it actually matches, keeps and boosts the candidate', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/match',
+      headers: { 'Content-Type': 'application/json' },
+      body: {
+        queries: [{
+          type: 'person',
+          conditions: [
+            { matchType: 'name', propertyValue: 'Goethe' },
+            { matchType: 'property', propertyId: 'gender', propertyValue: 'male', required: true, matchQualifier: 'ExactMatch' },
+          ],
+        }],
+      },
+    })
+      .validateSchema(resultSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        const candidate = body.results[0].candidates[0]
+        expect(candidate.id).to.eq('kbga-actors-136')
+        // ~41.38 (name alone, asserted earlier in this suite) + the flat 20-point
+        // boost for the matched required property condition.
+        expect(candidate.score).to.be.greaterThan(41.4)
+      })
+  })
+
+  it('matchType "id" resolves a known entity directly, at score 100', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/match',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries: [{ conditions: [{ matchType: 'id', propertyValue: 'kbga-actors-136' }] }] },
+    })
+      .validateSchema(resultSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        const candidate = body.results[0].candidates[0]
+        expect(candidate.id).to.eq('kbga-actors-136')
+        expect(candidate.score).to.eq(100)
+        expect(candidate.match).to.eq(true)
+      })
+  })
+
+  it('a property-only query with no name condition at all finds an entity purely by its "gnd" property (mirrors the spec\'s own "no query string" example)', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile/match',
+      headers: { 'Content-Type': 'application/json' },
+      body: {
+        queries: [{
+          type: 'person',
+          conditions: [
+            { matchType: 'property', propertyId: 'gnd', propertyValue: 'https://d-nb.info/gnd/119442086', matchQualifier: 'ExactMatch' },
+          ],
+        }],
+      },
+    })
+      .validateSchema(resultSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        const candidates = body.results[0].candidates
+        expect(candidates).to.have.length(1)
+        expect(candidates[0].id).to.eq('gnd-119442086')
+        expect(candidates[0].score).to.be.greaterThan(0)
+      })
+  })
+
+  it('the same property-condition matching works via 0.2\'s flat "properties" array, not just 1.0-draft "conditions"', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: { q0: { properties: [{ pid: 'gnd', v: 'https://d-nb.info/gnd/119442086' }] } },
+    }).then(({ status, body }) => {
+      expect(status).to.eq(200)
+      expect(body.q0.result).to.have.length(1)
+      expect(body.q0.result[0].id).to.eq('gnd-119442086')
+    })
+  })
+})
+
 describe('reconciliation API (0.2, ?version=0.2 manifest)', () => {
   let manifestSchema
   let resultSchema
