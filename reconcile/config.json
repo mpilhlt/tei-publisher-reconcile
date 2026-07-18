@@ -18,7 +18,7 @@
     ],
     "api": [
         {
-            "prefix": "recon",
+            "prefix": "reconc",
             "id": "http://teipublisher.com/api/reconcile",
             "path": "reconcile-api.xql",
             "spec": "reconcile-api.json"

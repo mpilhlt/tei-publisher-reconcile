@@ -36,7 +36,7 @@
                 "summary": "Service manifest",
                 "description": "Returns the service manifest describing the features supported by this reconciliation endpoint.",
                 "tags": ["reconcile"],
-                "operationId": "recon:manifest",
+                "operationId": "reconc:manifest",
                 "parameters": [
                     {
                         "name": "version",
@@ -72,7 +72,7 @@
                 "summary": "Reconciliation query batch",
                 "description": "Accepts a batch of reconciliation queries (0.2 object-keyed shape or 1.0-draft queries-array shape) and returns matching candidates. Also accepts the classic application/x-www-form-urlencoded 'queries=<json>' form POST some 0.2 clients (incl. the local 0.2 test bench) still use.",
                 "tags": ["reconcile"],
-                "operationId": "recon:reconcile",
+                "operationId": "reconc:reconcile",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -111,7 +111,7 @@
                 "summary": "Reconciliation query batch (alias)",
                 "description": "Alias of POST /api/reconcile, used by the 1.0-draft test bench, which posts queries to '<endpoint>/match'.",
                 "tags": ["reconcile"],
-                "operationId": "recon:reconcile",
+                "operationId": "reconc:reconcile",
                 "requestBody": {
                     "content": {
                         "application/json": {
@@ -150,7 +150,7 @@
                 "summary": "Suggest entities",
                 "description": "Entity auto-completion for a query prefix.",
                 "tags": ["reconcile"],
-                "operationId": "recon:suggest-entity",
+                "operationId": "reconc:suggest-entity",
                 "parameters": [
                     { "name": "prefix", "in": "query", "schema": { "type": "string" } },
                     { "name": "type", "in": "query", "schema": { "type": "string" } },
@@ -169,7 +169,7 @@
                 "summary": "Suggest properties",
                 "description": "Property auto-completion for a query prefix.",
                 "tags": ["reconcile"],
-                "operationId": "recon:suggest-property",
+                "operationId": "reconc:suggest-property",
                 "parameters": [
                     { "name": "prefix", "in": "query", "schema": { "type": "string" } },
                     { "name": "type", "in": "query", "schema": { "type": "string" } },
@@ -188,7 +188,7 @@
                 "summary": "Suggest types",
                 "description": "Reconciliation-type auto-completion for a query prefix.",
                 "tags": ["reconcile"],
-                "operationId": "recon:suggest-type",
+                "operationId": "reconc:suggest-type",
                 "parameters": [
                     { "name": "prefix", "in": "query", "schema": { "type": "string" } },
                     { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }
@@ -206,7 +206,7 @@
                 "summary": "Entity preview",
                 "description": "Small HTML preview of an entity, meant to be embedded in an iframe (see manifest.preview).",
                 "tags": ["reconcile"],
-                "operationId": "recon:preview",
+                "operationId": "reconc:preview",
                 "parameters": [
                     { "name": "id", "in": "query", "required": true, "schema": { "type": "string" } }
                 ],
@@ -223,7 +223,7 @@
                 "summary": "Entity view",
                 "description": "Redirects to the entity's real browse page when one exists (person, place), otherwise a minimal fallback HTML page (see manifest.view).",
                 "tags": ["reconcile"],
-                "operationId": "recon:entity",
+                "operationId": "reconc:entity",
                 "parameters": [
                     { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
                 ],
@@ -246,7 +246,7 @@
                 "summary": "Data extension",
                 "description": "Fetches property values for a batch of entity ids (1.0-draft canonical path). The classic GET '<endpoint>?extend=...' convention is handled directly on GET /api/reconcile.",
                 "tags": ["reconcile"],
-                "operationId": "recon:extend",
+                "operationId": "reconc:extend",
                 "parameters": [
                     {
                         "name": "version",
@@ -273,7 +273,7 @@
                 "summary": "Property proposal",
                 "description": "Suggests properties that can be fetched via data extension for a given type.",
                 "tags": ["reconcile"],
-                "operationId": "recon:extend-propose",
+                "operationId": "reconc:extend-propose",
                 "parameters": [
                     { "name": "type", "in": "query", "schema": { "type": "string" } },
                     { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }

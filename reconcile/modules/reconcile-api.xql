@@ -1,143 +1,73 @@
 xquery version "3.1";
 
-module namespace recon="http://teipublisher.com/api/reconcile";
+module namespace reconc="http://teipublisher.com/api/reconcile";
 
 import module namespace config="http://www.tei-c.org/tei-simple/config" at "config.xqm";
+import module namespace pm-config="http://www.tei-c.org/tei-simple/pm-config" at "pm-config.xql";
+import module namespace reconc-config="http://teipublisher.com/api/reconcile/config" at "reconcile-config.xql";
 import module namespace router="http://e-editiones.org/roaster";
 import module namespace errors="http://e-editiones.org/roaster/errors";
 
 declare namespace tei="http://www.tei-c.org/ns/1.0";
 
-(:~ Maps a reconciliation type id to the local name of the TEI element it is stored as. :)
-declare variable $recon:TYPE_ELEMENTS := map {
-    "person": "person",
-    "place": "place",
-    "organization": "org",
-    "work": "bibl"
-};
+(:~ All entity types this service can be reconciled against are defined in
+ : reconcile-config.xql ($reconc-config:TYPES) — see that file for how to add, remove or
+ : redefine a type, or swap the matching/ranking algorithm ($reconc-config:SCORE). This
+ : module only implements the HTTP-facing reconciliation protocol on top of it. :)
 
-declare variable $recon:TYPE_LABELS := map {
-    "person": "Person",
-    "place": "Place",
-    "organization": "Organization",
-    "work": "Work"
-};
-
-(:~ Real page under the "registers" profile a type's entities can be browsed at, if any. :)
-declare variable $recon:TYPE_VIEWS := map {
-    "person": "people",
-    "place": "places"
-};
-
-(:~ A small demo property catalog per reconciliation type, used by /suggest/property,
- : /extend and /extend/propose. Each property is {id, name, xpath} where xpath is a
- : function extracting the raw value(s) from a matched entity element. :)
-declare variable $recon:PROPERTIES := map {
-    "person": (
-        map { "id": "gender", "name": "Gender", "value": function($e as element()) { normalize-space($e/tei:gender[1]) } },
-        map { "id": "note", "name": "Biographical note", "value": function($e as element()) { normalize-space($e/tei:note[1]) } }
-    ),
-    "place": (
-        map { "id": "geo", "name": "Coordinates", "value": function($e as element()) { normalize-space($e/tei:location/tei:geo[1]) } },
-        map { "id": "type", "name": "Place type", "value": function($e as element()) { $e/@type/string() } }
-    ),
-    "organization": (),
-    "work": (
-        map { "id": "author", "name": "Author", "value": function($e as element()) { normalize-space($e/tei:author[1]) } }
-    )
-};
-
-(:~ All {id, name} properties across all types, or just for one type id if given. :)
-declare %private function recon:properties-for-type($type-id as xs:string?) as map(*)* {
-    let $types := if (exists($type-id)) then ($type-id) else map:keys($recon:PROPERTIES)
-    for $t in $types
-    for $prop in $recon:PROPERTIES($t)
-    return $prop
-};
-
-declare %private function recon:site-root($request as map(*)) as xs:string {
-    let $scheme := request:get-scheme()
-    let $host := request:get-server-name()
-    let $port := request:get-server-port()
-    let $default-port := if ($scheme = "https") then 443 else 80
-    let $authority := if ($port = $default-port) then $host else $host || ":" || $port
-    let $app-link := substring-after($config:app-root, repo:get-root())
-    let $path := string-join((request:get-context-path(), request:get-attribute("$exist:prefix"), $app-link), "/")
-    return
-        $scheme || "://" || $authority || replace($path, "/+", "/")
-};
-
-declare %private function recon:base-url($request as map(*)) as xs:string {
-    recon:site-root($request) || "/api/reconcile"
+(:~ Resolves a "label"/property "value" config entry to a callable extractor.
+ : Config values may be a function item (called as-is), or an xs:string containing
+ : a *relative* XPath expression (e.g. ".", ".//tei:persName[1]", "@type") evaluated
+ : against the entity via util:eval — the entity is bound as $data and the string
+ : is appended as a path step ("($data)/" || $xpath), so util:eval's dynamic context
+ : inherits this module's `tei` namespace declaration and the $data binding. A
+ : parenthesized "($data)/" prefix (rather than bare "$data" concatenation) avoids
+ : the XPath expression's first token being lexed as part of the variable reference
+ : itself (e.g. "$data" || "." would otherwise parse as the single token "$data.").
+ : See reconcile/doc/README.md for the tradeoffs. :)
+declare %private function reconc:resolve-extractor($value) as function(*) {
+    if ($value instance of function(*)) then
+        $value
+    else
+        function($data as item()*) as item()* {
+            util:eval("($data)/" || $value)
+        }
 };
 
 (:~ All registered entities for a reconciliation type id, e.g. "person". :)
-declare %private function recon:entities($type-id as xs:string) as element()* {
-    let $reg := $config:register-map($type-id)
-    let $elt-name := $recon:TYPE_ELEMENTS($type-id)
+declare %private function reconc:entities($type-id as xs:string) as element()* {
+    let $type-def := $reconc-config:TYPES?($type-id)
     return
-        if (exists($reg) and exists($elt-name)) then
-            collection($config:register-root)/id($reg?id)//*[local-name() = $elt-name][@xml:id]
+        if (exists($type-def)) then
+            ($type-def?entities)()
         else
             ()
 };
 
 (:~ Finds a single entity by id across all reconciliation types. Returns a map
  : {entity, type-id}, or the empty sequence if no type's register contains it. :)
-declare %private function recon:entity-by-id($id as xs:string) as map(*)? {
+declare %private function reconc:entity-by-id($id as xs:string) as map(*)? {
     let $match :=
-        for $type-id in map:keys($recon:TYPE_ELEMENTS)
-        let $entity := recon:entities($type-id)[@xml:id = $id]
+        for $type-id in map:keys($reconc-config:TYPES)
+        let $entity := reconc:entities($type-id)[@xml:id = $id]
         where exists($entity)
         return map { "entity": $entity, "type-id": $type-id }
     return head($match)
 };
 
-(:~ Human-readable label for a register entity, regardless of its concrete element type. :)
-declare %private function recon:label($entity as element()) as xs:string {
-    let $name :=
-        if ($entity/tei:persName) then
-            ($entity/tei:persName[@type = "main"], $entity/tei:persName)[1]
-        else if ($entity/tei:placeName) then
-            ($entity/tei:placeName[@type = "main"], $entity/tei:placeName)[1]
-        else if ($entity/tei:orgName) then
-            ($entity/tei:orgName[@type = "main"], $entity/tei:orgName)[1]
-        else if ($entity/tei:title) then
-            ($entity/tei:title[@type = "main"], $entity/tei:title)[1]
-        else
-            ()
-    return
-        normalize-space(if (exists($name)) then $name else $entity)
+(:~ Human-readable label for a matched entity, per its type's configured "label" extractor. :)
+declare %private function reconc:label($entity as element(), $type-id as xs:string) as xs:string {
+    let $extractor := reconc:resolve-extractor($reconc-config:TYPES?($type-id)?label)
+    let $raw := $extractor($entity)
+    return normalize-space(string-join(for $r in $raw return string($r), " "))
 };
 
-declare %private function recon:normalize-text($s as xs:string?) as xs:string {
+declare %private function reconc:normalize-text($s as xs:string?) as xs:string {
     lower-case(normalize-space($s))
 };
 
-(:~ Simple 0-100 similarity score between a candidate label and the query string. :)
-declare %private function recon:score($label as xs:string?, $query as xs:string?) as xs:double {
-    let $l := recon:normalize-text($label)
-    let $q := recon:normalize-text($query)
-    return
-        if ($q eq "" or $l eq "") then
-            0
-        else if ($l eq $q) then
-            100
-        else if (contains($l, $q) or contains($q, $l)) then
-            100.0 * (2 * min((string-length($l), string-length($q)))) div (string-length($l) + string-length($q))
-        else
-            let $l-tokens := tokenize($l, "\s+")
-            let $q-tokens := tokenize($q, "\s+")
-            let $shared := count(distinct-values($q-tokens[. = $l-tokens]))
-            return
-                if ($shared eq 0) then
-                    0
-                else
-                    100.0 * (2 * $shared) div (count($l-tokens) + count($q-tokens))
-};
-
 (:~ Reads a reconciliation "type" value, which may be absent, a single string, or an array of strings. :)
-declare %private function recon:normalize-types($type) as xs:string* {
+declare %private function reconc:normalize-types($type) as xs:string* {
     if (empty($type)) then
         ()
     else if ($type instance of array(*)) then
@@ -147,13 +77,15 @@ declare %private function recon:normalize-types($type) as xs:string* {
 };
 
 (:~ Find and score candidates for a query string, restricted to the given type ids (all default types if empty). :)
-declare %private function recon:candidates($type-ids as xs:string*, $query as xs:string?, $limit as xs:integer) as map(*)* {
-    let $types := if (empty($type-ids)) then map:keys($recon:TYPE_ELEMENTS) else $type-ids
+declare %private function reconc:candidates($type-ids as xs:string*, $query as xs:string?, $limit as xs:integer) as map(*)* {
+    let $types := if (empty($type-ids)) then map:keys($reconc-config:TYPES) else $type-ids
     let $scored :=
         for $type-id in $types
-        for $entity in recon:entities($type-id)
-        let $label := recon:label($entity)
-        let $score := recon:score($label, $query)
+        let $type-def := $reconc-config:TYPES?($type-id)
+        where exists($type-def)
+        for $entity in ($type-def?entities)()
+        let $label := reconc:label($entity, $type-id)
+        let $score := ($reconc-config:SCORE)($label, $query)
         where $score > 0
         return
             map {
@@ -167,7 +99,7 @@ declare %private function recon:candidates($type-ids as xs:string*, $query as xs
         subsequence($sorted, 1, max(($limit, 0)))
 };
 
-declare %private function recon:format-candidate($candidate as map(*)) as map(*) {
+declare %private function reconc:format-candidate($candidate as map(*)) as map(*) {
     map {
         "id": $candidate?id,
         "name": $candidate?name,
@@ -176,10 +108,26 @@ declare %private function recon:format-candidate($candidate as map(*)) as map(*)
         "type": [
             map {
                 "id": $candidate?type-id,
-                "name": $recon:TYPE_LABELS($candidate?type-id)
+                "name": $reconc-config:TYPES?($candidate?type-id)?name
             }
         ]
     }
+};
+
+declare %private function reconc:site-root($request as map(*)) as xs:string {
+    let $scheme := request:get-scheme()
+    let $host := request:get-server-name()
+    let $port := request:get-server-port()
+    let $default-port := if ($scheme = "https") then 443 else 80
+    let $authority := if ($port = $default-port) then $host else $host || ":" || $port
+    let $app-link := substring-after($config:app-root, repo:get-root())
+    let $path := string-join((request:get-context-path(), request:get-attribute("$exist:prefix"), $app-link), "/")
+    return
+        $scheme || "://" || $authority || replace($path, "/+", "/")
+};
+
+declare %private function reconc:base-url($request as map(*)) as xs:string {
+    reconc:site-root($request) || "/api/reconcile"
 };
 
 (:~
@@ -195,23 +143,23 @@ declare %private function recon:format-candidate($candidate as map(*)) as map(*)
  : checking which schema the fetched manifest validates against, so point it at
  : the plain endpoint for a 1.0-draft run and at "?version=0.2" for a 0.2 run.
  :)
-declare function recon:manifest($request as map(*)) {
+declare function reconc:manifest($request as map(*)) {
     let $extend-param := $request?parameters?extend
     return
         if (exists($extend-param) and normalize-space($extend-param) != "") then
             (: Classic (pre-1.0) data-extension convention: GET the service root with an
              : "extend" query parameter, still used by the local reconciliation test bench's
-             : data-extension tab. See recon:extend. :)
-            recon:extend-response(parse-json($extend-param), $request?parameters?version)
+             : data-extension tab. See reconc:extend. :)
+            reconc:extend-response(parse-json($extend-param), $request?parameters?version)
         else
-            recon:manifest-response($request)
+            reconc:manifest-response($request)
 };
 
-declare %private function recon:manifest-response($request as map(*)) {
+declare %private function reconc:manifest-response($request as map(*)) {
     let $version := $request?parameters?version
-    let $base := recon:base-url($request)
+    let $base := reconc:base-url($request)
     let $default-types := array {
-        map:for-each($recon:TYPE_LABELS, function($id, $name) { map { "id": $id, "name": $name } })
+        map:for-each($reconc-config:TYPES, function($id, $def) { map { "id": $id, "name": $def?name } })
     }
     return
         if ($version = "0.2") then
@@ -264,7 +212,7 @@ declare %private function recon:manifest-response($request as map(*)) {
 };
 
 (:~ Extracts the query text from a 1.0-draft query's conditions (the "name" match condition). :)
-declare %private function recon:query-text-from-conditions($query as map(*)) as xs:string? {
+declare %private function reconc:query-text-from-conditions($query as map(*)) as xs:string? {
     let $condition := $query?conditions?*[?matchType = "name"][1]
     let $value := $condition?propertyValue
     return
@@ -274,35 +222,35 @@ declare %private function recon:query-text-from-conditions($query as map(*)) as 
             $value
 };
 
-declare %private function recon:reconcile-1.0($body as map(*)) as map(*) {
+declare %private function reconc:reconcile-1.0($body as map(*)) as map(*) {
     let $queries := $body?queries?*
     return
         map {
             "results": array {
                 for $query in $queries
-                let $text := recon:query-text-from-conditions($query)
+                let $text := reconc:query-text-from-conditions($query)
                 let $limit := ($query?limit, 10)[1]
-                let $types := recon:normalize-types($query?type)
-                let $candidates := recon:candidates($types, $text, $limit)
+                let $types := reconc:normalize-types($query?type)
+                let $candidates := reconc:candidates($types, $text, $limit)
                 return
                     map {
-                        "candidates": array { for $c in $candidates return recon:format-candidate($c) }
+                        "candidates": array { for $c in $candidates return reconc:format-candidate($c) }
                     }
             }
         }
 };
 
-declare %private function recon:reconcile-0.2($query-map as map(*)) as map(*) {
+declare %private function reconc:reconcile-0.2($query-map as map(*)) as map(*) {
     map:merge(
         for $key in map:keys($query-map)
         let $query := $query-map($key)
         let $text := $query?query
         let $limit := ($query?limit, 10)[1]
-        let $types := recon:normalize-types($query?type)
-        let $candidates := recon:candidates($types, $text, $limit)
+        let $types := reconc:normalize-types($query?type)
+        let $candidates := reconc:candidates($types, $text, $limit)
         return
             map:entry($key, map {
-                "result": array { for $c in $candidates return recon:format-candidate($c) }
+                "result": array { for $c in $candidates return reconc:format-candidate($c) }
             })
     )
 };
@@ -317,7 +265,7 @@ declare %private function recon:reconcile-0.2($query-map as map(*)) as map(*) {
  : shape; a "queries" object (or the request body itself, per the strict 0.2
  : spec) keyed by arbitrary query ids with {query, type, limit} fields is 0.2.
  :)
-declare function recon:reconcile($request as map(*)) {
+declare function reconc:reconcile($request as map(*)) {
     let $raw-body := $request?body
     let $body :=
         (: application/x-www-form-urlencoded: body is {"queries": "<json string>"} — the
@@ -328,22 +276,22 @@ declare function recon:reconcile($request as map(*)) {
             $raw-body
     return
         if (map:contains($body, "queries") and $body?queries instance of array(*)) then
-            recon:reconcile-1.0($body)
+            reconc:reconcile-1.0($body)
         else if (map:contains($body, "queries")) then
-            recon:reconcile-0.2($body?queries)
+            reconc:reconcile-0.2($body?queries)
         else
-            recon:reconcile-0.2($body)
+            reconc:reconcile-0.2($body)
 };
 
 (:~
  : Suggest entities matching a prefix (auto-completion).
  : GET /api/reconcile/suggest/entity?prefix=...&type=...&limit=...
  :)
-declare function recon:suggest-entity($request as map(*)) {
+declare function reconc:suggest-entity($request as map(*)) {
     let $prefix := $request?parameters?prefix
-    let $types := recon:normalize-types($request?parameters?type)
+    let $types := reconc:normalize-types($request?parameters?type)
     let $limit := ($request?parameters?limit, 10)[1]
-    let $candidates := recon:candidates($types, $prefix, $limit)
+    let $candidates := reconc:candidates($types, $prefix, $limit)
     return
         map {
             "result": array {
@@ -352,23 +300,35 @@ declare function recon:suggest-entity($request as map(*)) {
                     map {
                         "id": $c?id,
                         "name": $c?name,
-                        "notable": [ map { "id": $c?type-id, "name": $recon:TYPE_LABELS($c?type-id) } ]
+                        "notable": [ map { "id": $c?type-id, "name": $reconc-config:TYPES?($c?type-id)?name } ]
                     }
             }
         }
+};
+
+(:~ All {id, name, value, type-id} properties across all types, or just for one type id if given. :)
+declare %private function reconc:properties-for-type($type-id as xs:string?) as map(*)* {
+    let $types := if (exists($type-id)) then ($type-id) else map:keys($reconc-config:TYPES)
+    for $t in $types
+    let $props := $reconc-config:TYPES?($t)?properties
+    where exists($props)
+    return
+        map:for-each($props, function($pid, $pdef) {
+            map:merge((map { "id": $pid, "type-id": $t }, $pdef))
+        })
 };
 
 (:~
  : Suggest properties matching a prefix (auto-completion).
  : GET /api/reconcile/suggest/property?prefix=...&type=...&limit=...
  :)
-declare function recon:suggest-property($request as map(*)) {
-    let $prefix := recon:normalize-text($request?parameters?prefix)
+declare function reconc:suggest-property($request as map(*)) {
+    let $prefix := reconc:normalize-text($request?parameters?prefix)
     let $type := $request?parameters?type
     let $limit := ($request?parameters?limit, 20)[1]
     let $matches :=
-        for $p in recon:properties-for-type($type)
-        where $prefix eq "" or contains(recon:normalize-text($p?id), $prefix) or contains(recon:normalize-text($p?name), $prefix)
+        for $p in reconc:properties-for-type($type)
+        where $prefix eq "" or contains(reconc:normalize-text($p?id), $prefix) or contains(reconc:normalize-text($p?name), $prefix)
         return map { "id": $p?id, "name": $p?name }
     return
         map { "result": array { subsequence($matches, 1, max(($limit, 0))) } }
@@ -378,13 +338,13 @@ declare function recon:suggest-property($request as map(*)) {
  : Suggest reconciliation types matching a prefix (auto-completion).
  : GET /api/reconcile/suggest/type?prefix=...&limit=...
  :)
-declare function recon:suggest-type($request as map(*)) {
-    let $prefix := recon:normalize-text($request?parameters?prefix)
+declare function reconc:suggest-type($request as map(*)) {
+    let $prefix := reconc:normalize-text($request?parameters?prefix)
     let $limit := ($request?parameters?limit, 20)[1]
     let $matches :=
-        map:for-each($recon:TYPE_LABELS, function($id, $name) {
-            if ($prefix eq "" or contains(recon:normalize-text($id), $prefix) or contains(recon:normalize-text($name), $prefix)) then
-                map { "id": $id, "name": $name }
+        map:for-each($reconc-config:TYPES, function($id, $def) {
+            if ($prefix eq "" or contains(reconc:normalize-text($id), $prefix) or contains(reconc:normalize-text($def?name), $prefix)) then
+                map { "id": $id, "name": $def?name }
             else
                 ()
         })
@@ -392,87 +352,95 @@ declare function recon:suggest-type($request as map(*)) {
         map { "result": array { subsequence($matches, 1, max(($limit, 0))) } }
 };
 
-(:~ Renders a minimal HTML fragment describing an entity, used by /preview and as a
- : fallback for /entity/{id} when the entity's type has no dedicated browse page. :)
-declare %private function recon:render-html($found as map(*)?) as element(html) {
-    <html>
-        <head><meta charset="UTF-8"/></head>
-        <body style="font-family: sans-serif; margin: 0.5em;">
-        {
-            if (empty($found)) then
-                <p>Entity not found.</p>
+(:~ Renders the preview/view HTML for a matched entity: the type's own "preview"
+ : function-item if configured, otherwise the app's ODD web-transform pipeline
+ : (the same one the "registers" profile itself uses) in the type's configured
+ : "preview-mode" (default "register-overview"). :)
+declare %private function reconc:render-html($request as map(*), $found as map(*)?) as item()* {
+    if (empty($found)) then
+        <html><head><meta charset="UTF-8"/></head><body><p>Entity not found.</p></body></html>
+    else
+        let $entity := $found?entity
+        let $type-def := $reconc-config:TYPES?($found?type-id)
+        return
+            if (exists($type-def?preview)) then
+                ($type-def?preview)($entity)
             else
-                let $entity := $found?entity
-                let $label := recon:label($entity)
-                let $type-id := $found?type-id
-                let $note := ($entity/tei:note[1], $entity/tei:bibl[1])[1]
-                return (
-                    <h3>{$label}</h3>,
-                    <p><em>{$recon:TYPE_LABELS($type-id)}</em></p>,
-                    if (exists($note)) then <p>{normalize-space($note)}</p> else ()
-                )
-        }
-        </body>
-    </html>
+                let $odd := head(($request?parameters?odd, $config:default-odd))
+                let $mode := head(($type-def?preview-mode, "register-overview"))
+                return
+                    <html>
+                        <head><meta charset="UTF-8"/></head>
+                        <body style="font-family: sans-serif; margin: 0.5em;">
+                        <div class="reconcile-preview">
+                        { ($pm-config:web-transform)($entity, map { "mode": $mode }, $odd) }
+                        </div>
+                        </body>
+                    </html>
 };
 
 (:~
  : HTML preview for embedding in an iframe (manifest.preview).
  : GET /api/reconcile/preview?id=...
  :)
-declare function recon:preview($request as map(*)) {
+declare function reconc:preview($request as map(*)) {
     let $id := $request?parameters?id
-    let $found := recon:entity-by-id($id)
+    let $found := reconc:entity-by-id($id)
     return
-        router:response(200, "text/html", recon:render-html($found))
+        router:response(200, "text/html", reconc:render-html($request, $found))
 };
 
 (:~
  : Entity view (manifest.view): redirects to the real registers browse page when the
- : entity's type has one (person, place), otherwise renders a minimal fallback page.
+ : entity's type has one configured ("view"), otherwise renders the preview HTML.
  : GET /api/reconcile/entity/{id}
  :)
-declare function recon:entity($request as map(*)) {
+declare function reconc:entity($request as map(*)) {
     let $id := $request?parameters?id
-    let $found := recon:entity-by-id($id)
+    let $found := reconc:entity-by-id($id)
     return
         if (empty($found)) then
             error($errors:NOT_FOUND, "No reconciled entity with id " || $id)
         else
-            let $view := $recon:TYPE_VIEWS($found?type-id)
+            let $view := $reconc-config:TYPES?($found?type-id)?view
             return
                 if (exists($view)) then
-                    router:response(303, (), (), map { "Location": recon:site-root($request) || "/" || $view || "/" || $id })
+                    router:response(303, (), (), map { "Location": reconc:site-root($request) || "/" || $view || "/" || $id })
                 else
-                    router:response(200, "text/html", recon:render-html($found))
+                    router:response(200, "text/html", reconc:render-html($request, $found))
 };
 
-(:~ Looks up a property definition by id across all types (property ids are unique in
- : this small demo catalog). :)
-declare %private function recon:property-by-id($id as xs:string?) as map(*)? {
+(:~ Looks up a property definition by id across all types (property ids are assumed
+ : unique across the configured type registry). :)
+declare %private function reconc:property-by-id($id as xs:string?) as map(*)? {
     if (empty($id)) then
         ()
     else
-        head(recon:properties-for-type(())[?id = $id])
+        head(reconc:properties-for-type(())[?id = $id])
 };
 
 (:~ Builds a data-extension response for the given query, shaped per protocol version
  : ("rows" is an array of {id, properties} in 1.0-draft, an id-keyed object of
  : property-id-keyed value arrays in 0.2). :)
-declare %private function recon:extend-response($query as map(*), $version as xs:string?) as map(*) {
+declare %private function reconc:extend-response($query as map(*), $version as xs:string?) as map(*) {
     let $ids := $query?ids?*
     let $properties := $query?properties?*
     let $meta := array {
         for $p in $properties
-        let $prop-def := recon:property-by-id($p?id)
+        let $prop-def := reconc:property-by-id($p?id)
         return map { "id": $p?id, "name": ($prop-def?name, $p?id)[1] }
     }
     let $value-for := function($id as xs:string, $prop-id as xs:string) as xs:string* {
-        let $found := recon:entity-by-id($id)
-        let $prop-def := recon:property-by-id($prop-id)
+        let $found := reconc:entity-by-id($id)
+        let $prop-def := reconc:property-by-id($prop-id)
         return
             if (exists($found) and exists($prop-def)) then
-                ($prop-def?value)($found?entity)[. != ""]
+                let $extractor := reconc:resolve-extractor($prop-def?value)
+                return
+                    for $v in $extractor($found?entity)
+                    let $s := string($v)
+                    where $s != ""
+                    return $s
             else
                 ()
     }
@@ -514,20 +482,20 @@ declare %private function recon:extend-response($query as map(*), $version as xs
  : Data extension: fetch property values for a batch of entity ids.
  : POST /api/reconcile/extend (1.0-draft canonical path). The classic GET
  : "<endpoint>?extend=..." convention some clients (incl. the local test bench) still
- : use is handled directly in recon:manifest.
+ : use is handled directly in reconc:manifest.
  :)
-declare function recon:extend($request as map(*)) {
-    recon:extend-response($request?body, $request?parameters?version)
+declare function reconc:extend($request as map(*)) {
+    reconc:extend-response($request?body, $request?parameters?version)
 };
 
 (:~
  : Data extension property proposal: suggest properties fetchable for a given type.
  : GET /api/reconcile/extend/propose?type=...&limit=...
  :)
-declare function recon:extend-propose($request as map(*)) {
+declare function reconc:extend-propose($request as map(*)) {
     let $type := $request?parameters?type
     let $limit := ($request?parameters?limit, 20)[1]
-    let $props := subsequence(recon:properties-for-type($type), 1, max(($limit, 0)))
+    let $props := subsequence(reconc:properties-for-type($type), 1, max(($limit, 0)))
     return
         map:merge((
             map {

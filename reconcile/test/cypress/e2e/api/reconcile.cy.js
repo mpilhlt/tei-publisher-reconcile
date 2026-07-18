@@ -92,7 +92,7 @@ describe('reconciliation API (0.2, ?version=0.2 manifest)', () => {
 
   it('POST a form-urlencoded "queries=<json>" batch (classic 0.2 wire format) also works', () => {
     // The local 0.2 test bench posts application/x-www-form-urlencoded with a
-    // "queries" form field, not raw JSON — see recon:reconcile's form-data branch.
+    // "queries" form field, not raw JSON — see reconc:reconcile's form-data branch.
     cy.api({
       method: 'POST',
       url: '/api/reconcile',
