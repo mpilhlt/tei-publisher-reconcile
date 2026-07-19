@@ -12,9 +12,12 @@ generated (see "Where things stand" below for the current state).
 BASE=http://localhost:8080/exist/apps/tp-reconc/api/reconcile
 ```
 
-If the container isn't running: `skills/teipublisher-reconciliation-testing/scripts/up.sh`
-(waits for readiness). If `tp-reconc` doesn't exist yet or seems out of date:
-`jinks update tp-reconc -s http://localhost:8080/exist/apps/jinks -u tei -p simple`
+If the container isn't running, `tp-reconc` doesn't exist yet, or `jinks`/Node aren't
+cooperating, stop here and see **[`README_TEST_CONTAINER.md`](README_TEST_CONTAINER.md)**
+first — it covers `up.sh`, app creation/regeneration, and troubleshooting (disk-full →
+read-only DB, Node version, CORS, crashed container, full reset) in detail. Short version:
+`skills/teipublisher-reconciliation-testing/scripts/up.sh` (waits for readiness), then if
+needed `jinks update tp-reconc -s http://localhost:8080/exist/apps/jinks -u tei -p simple`
 (needs Node ≥22 — `export NVM_DIR="$HOME/.nvm"; source "$NVM_DIR/nvm.sh"; nvm use 22`).
 
 ---
@@ -41,7 +44,9 @@ work continues so a future session/you-after-a-break can reorient in 30 seconds.
   respond, check `podman ps` / restart it. (We hit the host disk filling up and eXist
   going read-only once this session — see the `local-env-node-podman` memory / just
   check `podman system df` and `df -h /home` if PUTs start failing with a bare 500 and
-  an empty body.)
+  an empty body.) Full setup/troubleshooting steps now live in
+  **[`README_TEST_CONTAINER.md`](README_TEST_CONTAINER.md)** — use that instead of
+  re-deriving container commands from scratch.
 - No dev servers (testbench, es-dev-server) are running by default — start them
   yourself per the sections below when you need them.
 
