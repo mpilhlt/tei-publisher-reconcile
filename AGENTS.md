@@ -84,8 +84,27 @@ PROFILE=./reconcile                  # local profile dir
 # 1. Platform up (podman; v10 publishes 8080:8080; admin password empty)
 $SKILL/scripts/up.sh                 # runs existdb/teipublisher:10.0.0 and waits for readiness
 
-# 2a. First time only: create the app from your profile(s)
-jinks create "$APP" -c reconcile/config.json -s http://localhost:8080/exist/apps/jinks -u tei -p simple
+# 2a. First time only (or after a fresh/reset volume): register the profile, then create the app.
+# The Jinks server has to know about "reconcile" as an installable profile BEFORE any app can
+# `extends` it — a stock/reset container has never heard of it. `jinks watch`/`create-profile`
+# can do this too, but the CI-proven, no-interaction way is the bootstrap script:
+$SKILL/scripts/ci-bootstrap-profile.sh http://localhost:8080 "$PROFILE"
+
+# `jinks create -c <file>` wants an APP-level config (pkg.abbrev + extends: [...profile names]),
+# NOT the profile's own reconcile/config.json (that's a profile MANIFEST — depends/api/etc. — and
+# has no `pkg`, so passing it directly crashes jinks-cli with "Cannot read properties of undefined
+# (reading 'abbrev')"). Build one, e.g.:
+cat > /tmp/tp-reconc-app-config.json <<'JSON'
+{
+    "overwrite": "default",
+    "label": "TEI Publisher Reconciliation Demo",
+    "id": "https://e-editiones.org/apps/tp-reconc",
+    "extends": ["base10", "demo-data", "registers", "reconcile"],
+    "pkg": { "abbrev": "tp-reconc" },
+    "description": "Demo app for the OpenRefine Reconciliation Service profile"
+}
+JSON
+jinks create "$APP" -c /tmp/tp-reconc-app-config.json -s http://localhost:8080/exist/apps/jinks -u tei -p simple
 
 # 2b. Dev loop: live-sync profile edits, then regenerate the app
 $SKILL/scripts/watch-profile.sh "$PROFILE"    # leave running in the background

@@ -82,10 +82,43 @@ curl -s http://localhost:8080/exist/apps/tp-reconc/api/reconcile | jq .   # if t
 
 ## 2. Create or update the `tp-reconc` demo app
 
-**First time only** — create the app from the local profile source:
+**First time only** (or after a fresh/reset volume — see the troubleshooting note on data loss
+after a container crash, below) — this is a **two-step** process, not one command:
+
+**2a. Register the `reconcile` profile with the Jinks server.** A stock/reset container has never
+heard of a custom profile living only in this checkout — its `/db/apps/jinks/profiles/reconcile`
+collection simply doesn't exist yet, so nothing can `extends` it. The CI-proven, no-interaction way
+to upload it (pre-creates the collection tree with correct ownership, then PUTs every file with the
+right `Content-Type`):
 ```bash
-jinks create tp-reconc -c reconcile/config.json -s http://localhost:8080/exist/apps/jinks -u tei -p simple
+skills/teipublisher-reconciliation-testing/scripts/ci-bootstrap-profile.sh http://localhost:8080 ./reconcile
 ```
+(Equivalently, `jinks create-profile`/`jinks watch ./reconcile` can register+sync it interactively —
+see `skills/teipublisher-reconciliation-testing/references/jinks-profiles.md` — but the bootstrap
+script is faster and scriptable.)
+
+**2b. Create the app.** `jinks create -c <file>` expects an **app-level** configuration — `pkg.abbrev`
+plus an `extends` array naming which profiles to compose — **not** `reconcile/config.json` itself
+(that file is the *profile's own manifest*: `depends`/`api`/etc., with no `pkg` field at all). Passing
+the profile manifest directly to `-c` crashes jinks-cli with `TypeError: Cannot read properties of
+undefined (reading 'abbrev')` (it tries to read `config.pkg.abbrev` and `pkg` is missing) — this is a
+real, reproducible jinks-cli 2.4.0 bug in `editOrCreateConfiguration`/`config.js`, not a typo to just
+retry. Write an app-level config first:
+```bash
+cat > /tmp/tp-reconc-app-config.json <<'EOF'
+{
+    "overwrite": "default",
+    "label": "TEI Publisher Reconciliation Demo",
+    "id": "https://e-editiones.org/apps/tp-reconc",
+    "extends": ["base10", "demo-data", "registers", "reconcile"],
+    "pkg": { "abbrev": "tp-reconc" },
+    "description": "Demo app for the OpenRefine Reconciliation Service profile"
+}
+EOF
+jinks create tp-reconc -c /tmp/tp-reconc-app-config.json -s http://localhost:8080/exist/apps/jinks -u tei -p simple
+```
+(This mirrors `.github/workflows/ci.yml`'s "Create the test app" step exactly — that's the
+authoritative reference if this drifts again.)
 
 **Every subsequent edit to the profile** — regenerate:
 ```bash
@@ -141,10 +174,17 @@ the same way (defaults: `http://localhost:8080/exist/apps/jinks` / `tei` / `simp
 
 - **`up.sh` times out waiting for readiness** — check `podman logs teipub` for a crash/startup
   error. This host has hit two real causes before:
-  - **Container exited/crashed** (`podman ps -a` shows `Exited (139)` or similar) — just `podman
-    start teipub` again (or re-run `up.sh`, which does this automatically); the named volume means
-    no data is lost. If it crashes repeatedly, check `podman logs teipub` for an OOM or native crash
-    near the end of the log.
+  - **Container exited/crashed** (`podman ps -a` shows `Exited (139)` or similar — `139` is a
+    SIGSEGV) — `podman start teipub` again (or re-run `up.sh`, which does this automatically). The
+    named volume usually preserves data across this, **but not always**: a JVM segfault can lose
+    anything eXist hadn't checkpointed to disk yet, even though the volume itself survives. Confirmed
+    once on this host — a generated `tp-reconc` app and its `reconcile` profile registration that
+    worked fine in one session were both **silently gone** (404 / `xmldb:collection-available()`
+    false) after the container crashed and was restarted, with no error at restart time. **Don't
+    assume "the container is up" means "my app is still there"** — re-verify with a real request
+    (`curl .../api/reconcile`) before debugging application logic, and if it's gone, just redo step 2
+    (bootstrap the profile + `jinks create` again — cheap, a few seconds). If it happens often, check
+    `podman logs teipub` for what's actually segfaulting.
   - **Host disk full → eXist read-only mode** — if the container *is* running but every REST
     PUT/POST that writes fails with a bare `IOException: Database is read-only` (HTTP 500, empty
     body), the disk backing the container's data volume is likely full. eXist's `SyncTask` disk-space
@@ -164,6 +204,11 @@ the same way (defaults: `http://localhost:8080/exist/apps/jinks` / `tei` / `simp
   Also see the project's `jinks-cli-gotchas` guidance (in this repo's Claude memory / prior session
   notes) if `watch`/`create` appear to silently corrupt state on a **brand-new** profile — regenerate
   from scratch with `-r` if something seems stuck rather than debugging incremental sync state.
+- **`jinks create ... -c ... ` throws `TypeError: Cannot read properties of undefined (reading
+  'abbrev')`** — you passed `reconcile/config.json` (the profile's own manifest) as the `-c` file.
+  `-c` wants an app-level config (`pkg.abbrev` + `extends: [...]`); the profile manifest has no
+  `pkg` at all, so jinks-cli's `config.pkg.abbrev` lookup throws. See §2 above for the correct
+  two-step sequence (bootstrap the profile, then `jinks create` with a real app config).
 - **Container image won't pull / "short-name resolution" error** — this host's rootless podman has
   no `docker.io` alias; always use the fully-qualified `docker.io/existdb/teipublisher:10.0.0` (which
   is what `up.sh` already defaults to — only relevant if you invoke `podman run`/`pull` yourself).
@@ -185,7 +230,8 @@ To wipe all generated apps/uploaded profiles and start clean:
 podman rm -f teipub
 podman volume rm exist-data
 skills/teipublisher-reconciliation-testing/scripts/up.sh
-jinks create tp-reconc -c reconcile/config.json -s http://localhost:8080/exist/apps/jinks -u tei -p simple
+skills/teipublisher-reconciliation-testing/scripts/ci-bootstrap-profile.sh http://localhost:8080 ./reconcile
+jinks create tp-reconc -c /tmp/tp-reconc-app-config.json -s http://localhost:8080/exist/apps/jinks -u tei -p simple  # see §2b for the file's contents
 ```
 Useful when you suspect leftover DB state is masking a bug — the project's own "definition of done"
 requires re-running the full test suite once after exactly this kind of reset (or `jinks update
