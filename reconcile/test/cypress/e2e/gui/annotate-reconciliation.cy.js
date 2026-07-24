@@ -166,3 +166,36 @@ describe('Web annotation editor: mapping a match\'s fields to output attributes'
     cy.get('input[name="gnd"]').should('have.value', 'https://d-nb.info/gnd/137224435');
   });
 });
+
+// Regression coverage for a bug reported 2026-07-24: with fields="key=label,ref=id,..."
+// in effect (see the describe block above), clicking on an already-linked entity to view
+// its read-only detail popup showed "Entity not found" instead of the entity's actual
+// preview/properties. Root cause: pb-view-annotate's own detail-lookup reads the id from
+// whichever annotation property the "key"/"key-map" attribute names (default "key", i.e.
+// persName/@key) -- correct under the OLD single-attribute convention where @key held the
+// id, but @key now holds the *label* under the new field-mapping convention, with the id
+// in @ref instead. Fixed via a "person": "ref" entry in the app's key-map (see
+// tei-publisher-jinks profiles/annotate/config.json's features.annotate.configs.tei.keyMap,
+// wired onto <pb-view-annotate key-map="..."> in annotate.html) -- pb-view-annotate.js's
+// own getKey(type) already supported this per-type override, it just wasn't configured.
+// Self-contained (does not depend on another test's write): sermons/27003.xml already
+// carries a real, previously-linked persName (ref="kbga-actors-329" key="Rade-Martin-
+// 1857-1940", "Ruhe") from manual testing of the field-mapping feature -- exactly the
+// live document/entity the bug was originally reported against.
+describe('Web annotation editor: viewing an already-linked entity\'s detail popup', () => {
+  const annotateUrl = '/sermons/27003.xml?template=annotate.html&odd=annotations&view=single';
+  const auth = { username: 'tei', password: 'simple' };
+
+  it('shows the entity\'s real preview, not "Entity not found"', () => {
+    cy.visit(annotateUrl, { auth });
+    cy.wait(4000);
+    cy.get('.annotation.authority').contains('Ruhe').scrollIntoView().click({ force: true });
+    cy.wait(1000);
+
+    cy.get('.info').should(($info) => {
+      const text = $info.text();
+      expect(text, 'detail popup content').not.to.include('not found');
+      expect(text, 'detail popup content').to.include('Rade');
+    });
+  });
+});
