@@ -183,6 +183,25 @@ curl -s http://localhost:8080/exist/apps/tp-reconc/api/reconcile | jq .
 ```
 That's the exact command `README_MANUAL_TESTING.md` section A starts from.
 
+**Recreating just `tp-reconc` cleanly, without a full container/volume reset.** Useful for checking
+whether a problem is real or session-specific stale state (this exact recipe caught a false alarm on
+2026-07-24 — see `README_MANUAL_TESTING.md` §B3). A plain `podman`/collection delete is **not**
+enough — the Jinks server also tracks apps as installed EXPath packages, and `jinks create` will
+fail with `Collection /db/apps/tp-reconc not found` if you only delete the collection while the
+package registration still exists. Properly unregister first:
+```bash
+cat > /tmp/undeploy-tp-reconc.xq <<'EOF'
+import module namespace repo="http://exist-db.org/xquery/repo";
+(repo:undeploy("https://e-editiones.org/apps/tp-reconc"), repo:remove("https://e-editiones.org/apps/tp-reconc"))
+EOF
+EXISTDB_USER=admin skills/teipublisher-reconciliation-testing/scripts/ad-hoc-xquery.sh /tmp/undeploy-tp-reconc.xq
+curl -sS -u admin: -X DELETE "http://localhost:8080/exist/rest/db/apps/tp-reconc"   # belt-and-braces
+jinks create tp-reconc -c /tmp/tp-reconc-app-config.json -s http://localhost:8080/exist/apps/jinks -u tei -p simple
+```
+(the app's own package id, `https://e-editiones.org/apps/tp-reconc`, comes from the `"id"` field in
+your app-level config — swap it if you used a different one). The `reconcile` profile registration
+itself (§2a) is untouched by this and doesn't need redoing.
+
 ---
 
 ## 3. Everyday commands reference
@@ -275,29 +294,32 @@ the same way (defaults: `http://localhost:8080/exist/apps/jinks` / `tei` / `simp
   the vulnerable `model:map` path) against a real annotated document produced correct output with no
   duplicate `@data-tei` — see the `tei_publisher_lib_data_tei_fix` project memory for the exact query.
 
-  **A second, separate bug you'll also hit adding `annotate`/`upload`/`jinntap` (fixed 2026-07-24):**
-  a freshly/previously generated `tp-reconc` app's `modules/annotations/annotation-config.xqm` is
-  missing three functions (`anno:annotations`, `anno:occurrences`, `anno:fix-namespaces`) that
-  `annotate`'s own `annotations.xql` imports — and because XQuery module imports are resolved
-  eagerly, that breaks roaster's *entire* composed router, not just annotate routes (`/api/reconcile`
-  included). Fix: copy the full, working version from the `tp-workbench` demo app (which has a
-  working annotation setup via the "workbench" blueprint), fetched as binary/base64 to avoid both the
-  "plain GET executes .xqm as a module" gotcha and eXist's XML-entity-escaping of a plain string
-  query result (which would corrupt the `<persName>`-style element constructors in the source):
+  **A second, separate issue you may hit adding `annotate`/`upload`/`jinntap`, seen once (2026-07-23)
+  but NOT reproducible from a fresh app (confirmed 2026-07-24 — see below):** an app's
+  `modules/annotations/annotation-config.xqm` missing three functions (`anno:annotations`,
+  `anno:occurrences`, `anno:fix-namespaces`) that `annotate`'s own `annotations.xql` imports — and
+  because XQuery module imports are resolved eagerly, that breaks roaster's *entire* composed router,
+  not just annotate routes (`/api/reconcile` included). **This turned out to be session-specific
+  stale state, not a real bug** — deleting `tp-reconc` completely and recreating it from scratch
+  produced a byte-identical, working `annotation-config.xqm` with no manual intervention (see
+  "Full reset" §5 for the proper deletion sequence — a plain collection delete is not enough, the
+  Jinks server also tracks apps as installed EXPath packages via `repo:list()`). If you ever see this
+  error again despite a genuinely fresh app, the workaround is to copy the working file from the
+  `tp-workbench` demo app (fetched as binary/base64 to avoid both the "plain GET executes .xqm as a
+  module" gotcha and eXist's XML-entity-escaping of a plain string query result, which would corrupt
+  the `<persName>`-style element constructors in the source):
   ```bash
   echo 'util:binary-doc("/db/apps/tp-workbench/modules/annotations/annotation-config.xqm")' \
     | EXISTDB_USER=admin skills/teipublisher-reconciliation-testing/scripts/ad-hoc-xquery.sh | base64 -d \
     | curl -sS -u tei:simple -X PUT -H "Content-Type: application/xquery" --data-binary @- \
         "http://localhost:8080/exist/rest/db/apps/tp-reconc/modules/annotations/annotation-config.xqm"
   ```
-  Then recompile ODDs again (`POST /api/odd` as above). Open question, not investigated further:
-  *why* the current `annotate` profile's templated per-doctype delegation design
-  (`features.annotate.configs.tei` → a generated `tei-annotation-config.xqm`, declared in
-  `tei-publisher-jinks/profiles/annotate/config.json`) didn't produce a working file for this app in
-  the first place — `tp-reconc` never got a `tei-annotation-config.xqm` at all, and `tp-workbench`'s
-  working copy is the older, fully-hardcoded style predating that design. See
-  `README_MANUAL_TESTING.md` §B3 and the `annotate_reconciliation_client`/`tei_publisher_lib_data_tei_fix`
-  project memories.
+  then recompile ODDs again (`POST /api/odd` as above). See `README_MANUAL_TESTING.md` §B3 and the
+  `annotate_reconciliation_client`/`tei_publisher_lib_data_tei_fix` project memories for the full
+  investigation, including why this isn't a `tei-publisher-jinks` "delegation mechanism" bug (it
+  isn't — the Jinks server's own bundled `annotate` profile is a plain, non-templated, already-working
+  copy; the templated `features.annotate.configs` design only exists in this project's unrelated,
+  never-deployed local `./tei-publisher-jinks` git checkout).
 - **Container image won't pull / "short-name resolution" error** — this host's rootless podman has
   no `docker.io` alias; always use the fully-qualified `docker.io/existdb/teipublisher:10.0.0` (which
   is what `up.sh` already defaults to — only relevant if you invoke `podman run`/`pull` yourself).

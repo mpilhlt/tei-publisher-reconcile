@@ -337,17 +337,31 @@ got a duplicate `data-tei` attribute (construction throws `XQDY0025` immediately
 serialization, if it does). Full Cypress (36) + XQSuite suites re-confirmed green
 afterward.
 
-**Still an open question, for whoever next works on the `annotate` Jinks profile:**
-`annotate/config.json` declares `features.annotate.configs.tei` pointing at a companion
-module `tei-annotation-config.xqm`, and the *current* `annotation-config.tpl.xqm`
-template is built entirely around delegating to per-doctype modules registered that way
-— but `tp-reconc` was checked and never actually got a generated
-`tei-annotation-config.xqm` at all. Either that delegation mechanism doesn't currently
-work for a freshly-composed app, or `tp-reconc`'s stale `annotation-config.xqm` predates
-that redesign and was never regenerated from the current template (Jinks preserves
-local-looking files rather than overwriting them). `tp-workbench`'s working copy is the
-older, fully-hardcoded style (no delegation) — copying it is a reliable practical fix,
-but doesn't explain or fix why the *current* templated design doesn't work for this app.
+**Resolved 2026-07-24: the "delegation mechanism" question was a red herring, not a
+bug.** Suspected `annotate/config.json`'s templated `features.annotate.configs.tei` →
+`tei-annotation-config.xqm` delegation design might be broken for a freshly-composed
+app. Tested directly: deleted `tp-reconc` completely (`repo:undeploy` + `repo:remove` +
+collection removal — a plain collection delete alone isn't enough, the Jinks server also
+tracks apps as installed EXPath packages) and ran `jinks create` from nothing. Result: a
+byte-for-byte **working** `annotation-config.xqm` (148 lines, identical to
+`tp-workbench`'s), full test suite green, and a clean screenshot of both the register
+browse page and the annotate editor rendering real entity-tagged content correctly
+(person/place/date/ref highlighting) with no `XQDY0025`, no giant icons.
+
+The actual explanation: the Jinks *server's own* registered `annotate` profile
+(`/db/apps/jinks/profiles/annotate/modules/annotations/annotation-config.xqm` — no
+`.tpl.` suffix) ships the plain, fully-hardcoded implementation directly, byte-identical
+to what `tp-workbench` and a fresh `tp-reconc` both get. The templated
+`features.annotate.configs`/`[[ ]]`-marker delegation design lives only in this
+project's **local** `./tei-publisher-jinks` git checkout (a fork of upstream
+`eeditiones/jinks` kept for reference/potential future work) — nothing in this
+project's tooling syncs that checkout's `annotate` profile onto the running Jinks server
+(only `profiles/reconcile`, via `ci-bootstrap-profile.sh`, gets that treatment). The
+server's copy came bundled with the `existdb/teipublisher:10.0.0` image itself, an
+entirely separate, older lineage. **The earlier "missing functions" bug was
+session-specific stale state in that one `tp-reconc` app** (accumulated across many
+partial creates/updates over a long session), not a reproducible defect — a genuinely
+fresh app just works. No fix needed in `tei-publisher-jinks`; nothing to file upstream.
 
 **3. Click path in**, once 1–2 are sorted:
 1. Log in, open a document with tagged entities.
@@ -481,16 +495,16 @@ A ~5–8 minute walkthrough that shows the interesting parts, roughly in order o
   "zero candidates at its correct position" instead. Covered by 5 new Cypress tests.
   **Still worth a real OpenRefine re-run** to confirm the actual ecosystem client is
   happy, not just the curl-level repro.
-- **Annotate-editor click-through** (B3 above) — **both blockers fixed 2026-07-24 and
-  verified**: the `XQDY0025` core bug (tei-publisher-lib 6.1.1) and the missing
-  `annotation-config.xqm` functions (copied from `tp-workbench`). `tp-reconc` is
-  currently running with `annotate`/`upload`/`jinntap`/`theme-base10` active and a
-  working annotation config. Still open: (1) *why* the current `annotate` profile's
-  templated delegation design (`features.annotate.configs.tei` →
-  `tei-annotation-config.xqm`) didn't generate correctly for this app in the first
-  place — a `tei-publisher-jinks` profile question, not investigated further; (2) the
-  Reconciliation connector was observed querying `https://api.metagrid.ch/...` instead
-  of the local endpoint — not yet re-tested now that the app actually loads (see B3).
+- **Annotate-editor click-through** (B3 above) — **fixed 2026-07-24 and verified from a
+  truly fresh app creation** (deleted `tp-reconc` completely, `jinks create`'d again,
+  screenshotted): the `XQDY0025` core bug (tei-publisher-lib 6.1.1) is fixed and applies
+  automatically to any new app with no extra steps; the "missing `annotation-config.xqm`
+  functions" issue turned out to be session-specific stale state in one app, not a real
+  bug — a fresh create already produces a byte-identical, working copy to
+  `tp-workbench`'s, no manual copy needed. Layout is clean too (no giant icons) with the
+  theme in the `-c` config from the start. Still open: the Reconciliation connector was
+  observed querying `https://api.metagrid.ch/...` instead of the local endpoint — not
+  yet re-tested now that the app actually loads correctly (see B3).
 - Extending a property via an arbitrary XPath (e.g. "all document URLs where this
   entity occurs") isn't supported by the current `properties` config shape — open
   design question, not started.
