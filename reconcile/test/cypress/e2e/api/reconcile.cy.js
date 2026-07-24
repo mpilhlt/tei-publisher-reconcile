@@ -525,3 +525,103 @@ describe('request-size caps (production hardening)', () => {
       .should('eq', 200)
   })
 })
+
+// Regression coverage for a real OpenRefine 3.10.0 run (2026-07-23) against this
+// server that produced 5 matches / 88 errors on a ~93-row column — see the
+// `openrefine_batch_bug` project memory / README_MANUAL_TESTING.md "Known gaps".
+// Root cause, confirmed live via curl before this fix: a single malformed entry
+// anywhere in a batch (a blank cell serialized as JSON null, or any non-object
+// value) either crashed the *entire* HTTP request with a 500, or — for the
+// 1.0-draft array shape specifically — silently vanished during array unboxing,
+// shortening "results" and shifting every later query's answer out of position.
+// That exact mismatch is what OpenRefine's own batch-shape check reports as
+// "No. of recon objects was less than no. of jobs".
+describe('malformed batch entries do not crash or misalign the batch (OpenRefine hardening)', () => {
+  let resultSchema
+
+  before(() => {
+    cy.fixture('schemas/1.0/reconciliation-result-batch.json').then((s) => { resultSchema = s })
+  })
+
+  it('1.0-draft: a null entry in "queries" keeps every other query at its correct position', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: {
+        queries: [
+          { type: 'person', conditions: [{ matchType: 'name', propertyValue: 'Goethe' }] },
+          null,
+          { type: 'person', conditions: [{ matchType: 'name', propertyValue: 'Schiller' }] },
+        ],
+      },
+    })
+      .validateSchema(resultSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        expect(body.results).to.have.length(3)
+        // position 0 (Goethe) must still resolve to the real Goethe entity, not
+        // be shifted by the null in between it and the Schiller query.
+        expect(body.results[0].candidates[0].id).to.eq('kbga-actors-136')
+        expect(body.results[1].candidates).to.have.length(0)
+      })
+  })
+
+  it('1.0-draft: a non-object (scalar) entry in "queries" degrades to zero candidates instead of a 500', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: {
+        queries: [
+          { type: 'person', conditions: [{ matchType: 'name', propertyValue: 'Goethe' }] },
+          'Schiller',
+        ],
+      },
+    })
+      .validateSchema(resultSchema)
+      .then(({ status, body }) => {
+        expect(status).to.eq(200)
+        expect(body.results).to.have.length(2)
+        expect(body.results[1].candidates).to.have.length(0)
+      })
+  })
+
+  it('0.2: a null value for a query key keeps every key in the response, without a 500', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries: { q0: { query: 'Goethe' }, q1: null } },
+    }).then(({ status, body }) => {
+      expect(status).to.eq(200)
+      expect(Object.keys(body)).to.have.length(2)
+      expect(body.q1.result).to.have.length(0)
+    })
+  })
+
+  it('0.2: a non-object (scalar) value for a query key degrades gracefully, without a 500', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries: { q0: { query: 'Goethe' }, q1: 'Schiller' } },
+    }).then(({ status, body }) => {
+      expect(status).to.eq(200)
+      expect(Object.keys(body)).to.have.length(2)
+      expect(body.q1.result).to.have.length(0)
+    })
+  })
+
+  it('a non-numeric "limit" falls back to the default instead of crashing with a 500', () => {
+    cy.api({
+      method: 'POST',
+      url: '/api/reconcile',
+      headers: { 'Content-Type': 'application/json' },
+      body: { queries: [{ type: 'person', limit: 'abc', conditions: [{ matchType: 'name', propertyValue: 'Goethe' }] }] },
+    })
+      .validateSchema(resultSchema)
+      .its('status')
+      .should('eq', 200)
+  })
+})

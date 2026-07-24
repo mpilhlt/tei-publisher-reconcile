@@ -120,6 +120,42 @@ jinks create tp-reconc -c /tmp/tp-reconc-app-config.json -s http://localhost:808
 (This mirrors `.github/workflows/ci.yml`'s "Create the test app" step exactly — that's the
 authoritative reference if this drifts again.)
 
+**2c. Optional — testing the annotation editor UI in a browser.** The config above is enough for
+curl/Cypress/the testbench/OpenRefine (everything in section 3 below and `README_MANUAL_TESTING.md`
+sections A/C). If you also want to click through the **annotation editor** (see
+`README_MANUAL_TESTING.md` §B3 for the full click path and known open issues), use this extended
+config instead — it adds `upload`, `jinntap`, `annotate`, `theme-base10`, and switches the theme
+palette to `neutral` (the default theme renders the annotate UI unusably):
+```json
+{
+    "theme": { "colors": { "palette": "neutral" } },
+    "overwrite": "default",
+    "label": "TEI Publisher Reconciliation Demo",
+    "id": "https://e-editiones.org/apps/tp-reconc",
+    "extends": ["base10", "demo-data", "theme-base10", "registers", "reconcile", "upload", "jinntap", "annotate"],
+    "pkg": { "abbrev": "tp-reconc" },
+    "description": "Demo app for the OpenRefine Reconciliation Service profile"
+}
+```
+This path needs two things fixed before the annotate view actually works — both fixed 2026-07-24 and
+covered in Troubleshooting (§4) below: a `tei-publisher-lib` package upgrade (the `XQDY0025` entry),
+and copying a complete `annotation-config.xqm` over from `tp-workbench` (the entry right after it).
+
+**Use `-c` on the `jinks update`, not a bare `jinks update tp-reconc`.** There is no separate
+"apply the theme" build step distinct from the normal generate/update pipeline — clicking **Apply**
+in the Jinks web UI just POSTs whatever config is in the browser's JSON editor to the same
+`api/generator` endpoint that `jinks create`/`jinks update` already use (confirmed by reading
+`tei-publisher-jinks/resources/scripts/editor.js`). The reason a bare `jinks update tp-reconc` looks
+like it "doesn't apply the theme" is that **`update` without `-c` re-fetches and re-POSTs the
+*currently-installed* config** (`loadConfigFromApplication` in jinks-cli), which doesn't know about
+the theme/extra profiles until you've explicitly pushed a config that includes them:
+```bash
+jinks update tp-reconc -c /tmp/tp-reconc-app-config.json -s http://localhost:8080/exist/apps/jinks -u tei -p simple
+```
+Do this once with the extended config above; after that, the *installed* config includes the theme,
+so plain `jinks update tp-reconc` (or `regenerate.sh tp-reconc`) keeps it applied on later edits —
+exactly like the existing `-c`-vs-bare-`update` distinction already documented for `jinks create`.
+
 **Every subsequent edit to the profile** — regenerate:
 ```bash
 skills/teipublisher-reconciliation-testing/scripts/regenerate.sh tp-reconc          # incremental
@@ -209,6 +245,59 @@ the same way (defaults: `http://localhost:8080/exist/apps/jinks` / `tei` / `simp
   `-c` wants an app-level config (`pkg.abbrev` + `extends: [...]`); the profile manifest has no
   `pkg` at all, so jinks-cli's `config.pkg.abbrev` lookup throws. See §2 above for the correct
   two-step sequence (bootstrap the profile, then `jinks create` with a real app config).
+- **`err:XQDY0025: element has more than one attribute 'data-tei'` in the annotate view — fixed
+  2026-07-24, upstream, in `tei-publisher-lib`, not by patching the generated app.**
+  `transform/teipublisher-web.xql` is *compiled output* of TEI Publisher's ODD→XQuery compiler;
+  the real bug was in `model:map()`, `tei-publisher-lib/content/model.xql` (~line 303-314), which
+  unconditionally wrote `attribute data-tei { util:node-id($context) }` onto every tracked element
+  without checking whether one already existed. Fixed by guarding it
+  (`if ($node/@data-tei) then () else attribute data-tei {...}`), bumping the package to `6.1.1`,
+  building a new `.xar` (`cd tei-publisher-lib && ant`), and installing it into the running
+  container in place of the stock package:
+  ```bash
+  curl -sS -u admin: -X PUT -H "Content-Type: application/octet-stream" \
+    --data-binary @tei-publisher-lib/build/tei-publisher-lib.xar \
+    "http://localhost:8080/exist/rest/db/tei-publisher-lib-6.1.1.xar"
+  echo 'import module namespace repo="http://exist-db.org/xquery/repo";
+        repo:install-and-deploy-from-db("/db/tei-publisher-lib-6.1.1.xar")' \
+    | EXISTDB_USER=admin skills/teipublisher-reconciliation-testing/scripts/ad-hoc-xquery.sh
+  ```
+  Then **recompile every app's ODDs** — a package upgrade does not retroactively fix already-compiled
+  `transform/*.xql` files sitting in an app's collection; the package's own changelog note says
+  exactly this ("Generated apps may fail after updating. Make sure to recompile your ODDs."):
+  ```bash
+  curl -sS -u tei:simple -X POST "http://localhost:8080/exist/apps/tp-reconc/api/odd"
+  ```
+  Verified: after this, every ODD (including `annotations`) recompiles with no errors, and the
+  installed `content/model.xql` contains the guard (checked via `repo:get-resource(...,
+  "content/model.xql")`). Confirmed at the code level too, not just "no compile error": invoking the
+  compiled transform directly with `map { "track-ids": true() }` (the exact parameter that turns on
+  the vulnerable `model:map` path) against a real annotated document produced correct output with no
+  duplicate `@data-tei` — see the `tei_publisher_lib_data_tei_fix` project memory for the exact query.
+
+  **A second, separate bug you'll also hit adding `annotate`/`upload`/`jinntap` (fixed 2026-07-24):**
+  a freshly/previously generated `tp-reconc` app's `modules/annotations/annotation-config.xqm` is
+  missing three functions (`anno:annotations`, `anno:occurrences`, `anno:fix-namespaces`) that
+  `annotate`'s own `annotations.xql` imports — and because XQuery module imports are resolved
+  eagerly, that breaks roaster's *entire* composed router, not just annotate routes (`/api/reconcile`
+  included). Fix: copy the full, working version from the `tp-workbench` demo app (which has a
+  working annotation setup via the "workbench" blueprint), fetched as binary/base64 to avoid both the
+  "plain GET executes .xqm as a module" gotcha and eXist's XML-entity-escaping of a plain string
+  query result (which would corrupt the `<persName>`-style element constructors in the source):
+  ```bash
+  echo 'util:binary-doc("/db/apps/tp-workbench/modules/annotations/annotation-config.xqm")' \
+    | EXISTDB_USER=admin skills/teipublisher-reconciliation-testing/scripts/ad-hoc-xquery.sh | base64 -d \
+    | curl -sS -u tei:simple -X PUT -H "Content-Type: application/xquery" --data-binary @- \
+        "http://localhost:8080/exist/rest/db/apps/tp-reconc/modules/annotations/annotation-config.xqm"
+  ```
+  Then recompile ODDs again (`POST /api/odd` as above). Open question, not investigated further:
+  *why* the current `annotate` profile's templated per-doctype delegation design
+  (`features.annotate.configs.tei` → a generated `tei-annotation-config.xqm`, declared in
+  `tei-publisher-jinks/profiles/annotate/config.json`) didn't produce a working file for this app in
+  the first place — `tp-reconc` never got a `tei-annotation-config.xqm` at all, and `tp-workbench`'s
+  working copy is the older, fully-hardcoded style predating that design. See
+  `README_MANUAL_TESTING.md` §B3 and the `annotate_reconciliation_client`/`tei_publisher_lib_data_tei_fix`
+  project memories.
 - **Container image won't pull / "short-name resolution" error** — this host's rootless podman has
   no `docker.io` alias; always use the fully-qualified `docker.io/existdb/teipublisher:10.0.0` (which
   is what `up.sh` already defaults to — only relevant if you invoke `podman run`/`pull` yourself).

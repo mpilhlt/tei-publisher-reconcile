@@ -86,6 +86,35 @@ declare %private function reconc:normalize-types($type) as xs:string* {
         $type
 };
 
+(:~ Defends the per-query batch loop against a malformed or absent entry — e.g. a
+ : blank OpenRefine cell serialized as JSON null, or any other non-object value —
+ : by treating it as an empty query (no name/ids/properties, so it always scores
+ : zero candidates) instead of raising a fatal type error that would abort the
+ : *entire* batch response for every other, well-formed query in it. Confirmed
+ : live against real OpenRefine traffic: a single null/non-object entry anywhere
+ : in a batch used to turn into an HTTP 500 for the whole request (reconc-cond:
+ : normalize-1.0/0.2 both require "$query as map(*)" and reject anything else),
+ : which is far worse than "no candidates" for just that one row. :)
+declare %private function reconc:as-query-map($query as item()*) as map(*) {
+    if ($query instance of map(*)) then $query else map {}
+};
+
+(:~ Parses a query's "limit" into a valid xs:integer, capped at MAX_LIMIT,
+ : defaulting to $default on anything that isn't a valid integer (e.g. a
+ : non-numeric string) instead of raising a fatal cast error — same "one bad row
+ : must not crash the whole batch" reasoning as reconc:as-query-map. Confirmed
+ : live: an unparsable "limit" used to turn into an HTTP 500 (err:FORG0001) for
+ : the entire batch. :)
+declare %private function reconc:safe-limit($raw as item()*, $default as xs:integer) as xs:integer {
+    let $n :=
+        try {
+            xs:integer(($raw, $default)[1])
+        } catch * {
+            $default
+        }
+    return min(($n, $reconc-config:MAX_LIMIT))
+};
+
 (:~ Pre-filters a type's entities via its configured "fulltext-search" closure
  : (see reconcile-config.xql's doc for that field) so only plausible candidates
  : reach the (much more expensive, per-candidate) scoring in reconc:candidates. An
@@ -361,22 +390,31 @@ declare %private function reconc:all-queried-types($type-restrictions as array(*
 };
 
 declare %private function reconc:reconcile-1.0($body as map(*)) as map(*) {
-    let $queries := $body?queries?*
+    (: Deliberately NOT "$body?queries?*" here — unboxing an array that way drops
+     : any member holding the empty sequence (i.e. a JSON null entry) entirely,
+     : silently shortening the sequence and shifting every later query's result
+     : out of its correct position. array:size/positional array access preserves
+     : every member, null or not, so reconc:as-query-map below can turn a null
+     : into an explicit "no candidates" result at its *original* position instead
+     : of making it vanish. Confirmed live: this exact scenario used to produce a
+     : "results" array shorter than "queries", which is exactly the mismatch
+     : OpenRefine's own batch-shape check (its "No. of recon objects was less
+     : than no. of jobs" error) flags as invalid. :)
+    let $queries-arr := $body?queries
+    let $count := array:size($queries-arr)
     return
-        if (count($queries) > $reconc-config:MAX_BATCH_SIZE) then
-            error($errors:BAD_REQUEST, "Batch too large: " || count($queries) || " queries (max " || $reconc-config:MAX_BATCH_SIZE || ")")
+        if ($count > $reconc-config:MAX_BATCH_SIZE) then
+            error($errors:BAD_REQUEST, "Batch too large: " || $count || " queries (max " || $reconc-config:MAX_BATCH_SIZE || ")")
         else
-            let $per-query-types := for $query in $queries return array { reconc:normalize-types($query?type) }
+            let $safe-queries := for $i in 1 to $count return reconc:as-query-map($queries-arr($i))
+            let $per-query-types := for $query in $safe-queries return array { reconc:normalize-types($query?type) }
             let $pool := reconc:candidate-pool(reconc:all-queried-types($per-query-types))
             return
                 map {
                     "results": array {
-                        for $query at $i in $queries
+                        for $query at $i in $safe-queries
                         let $conditions := reconc-cond:normalize-1.0($query)
-                        (: $query?limit comes from parse-json (xs:double); cast before min() with the
-                         : xs:integer MAX_LIMIT/literal default, or eXist raises FORG0006 comparing
-                         : xs:double and xs:integer. :)
-                        let $limit := min((xs:integer(($query?limit, 10)[1]), $reconc-config:MAX_LIMIT))
+                        let $limit := reconc:safe-limit($query?limit, 10)
                         let $candidates := reconc:candidates($per-query-types[$i]?*, $conditions, $limit, $pool)
                         return
                             map {
@@ -387,19 +425,25 @@ declare %private function reconc:reconcile-1.0($body as map(*)) as map(*) {
 };
 
 declare %private function reconc:reconcile-0.2($query-map as map(*)) as map(*) {
+    (: map:keys keeps every key regardless of its value (a JSON-null value doesn't
+     : remove the key the way a null array member vanishes during unboxing above)
+     : — but the *value* itself can still be null/non-object, which used to crash
+     : reconc-cond:normalize-0.2's "$query as map(*)" parameter with a fatal type
+     : error for the whole batch. reconc:as-query-map guards that the same way. :)
     let $keys := map:keys($query-map)
     return
         if (count($keys) > $reconc-config:MAX_BATCH_SIZE) then
             error($errors:BAD_REQUEST, "Batch too large: " || count($keys) || " queries (max " || $reconc-config:MAX_BATCH_SIZE || ")")
         else
-            let $per-query-types := for $key in $keys return array { reconc:normalize-types($query-map($key)?type) }
+            let $safe-queries := for $key in $keys return reconc:as-query-map($query-map($key))
+            let $per-query-types := for $query in $safe-queries return array { reconc:normalize-types($query?type) }
             let $pool := reconc:candidate-pool(reconc:all-queried-types($per-query-types))
             return
                 map:merge(
                     for $key at $i in $keys
-                    let $query := $query-map($key)
+                    let $query := $safe-queries[$i]
                     let $conditions := reconc-cond:normalize-0.2($query)
-                    let $limit := min((xs:integer(($query?limit, 10)[1]), $reconc-config:MAX_LIMIT))
+                    let $limit := reconc:safe-limit($query?limit, 10)
                     let $candidates := reconc:candidates($per-query-types[$i]?*, $conditions, $limit, $pool)
                     return
                         map:entry($key, map {
