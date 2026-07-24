@@ -167,6 +167,80 @@ describe('Web annotation editor: mapping a match\'s fields to output attributes'
   });
 });
 
+// Confirms field-mapping (and the matching keyMap entry needed for the click-to-view detail
+// popup, see the describe block below) is not person-only: the mechanism itself lives entirely
+// in Registry.buildProperties (tei-publisher-components), shared by every connector including
+// "Custom" (which "place"/"organization"/"work" use, wrapping the local register plus a
+// GND/GeoNames fallback) - only the demo's own annotate-tei.html config decided which types
+// actually turn it on. Uses "place" specifically because it has real, searchable local register
+// data (unlike organization/work, which have none in this demo) - same mechanism though, so this
+// stands in for all three.
+describe('Web annotation editor: field-mapping and detail popups work for types other than person', () => {
+  const annotateUrl = '/demo/CIDTC-3823-cortez.xml?template=annotate.html&odd=annotations&view=single';
+  const auth = { username: 'tei', password: 'simple' };
+
+  it('writes the escaped name and id to separate attributes for a "place" match', () => {
+    cy.visit(annotateUrl, { auth });
+    cy.wait(4000);
+    // "Castilla" (unlike "México", which is also a substring of a second, separately
+    // annotated "gran ciudad de México" span in this same document) appears exactly once,
+    // so cy.contains() can't ambiguously match the wrong occurrence.
+    cy.get('.annotation.authority').contains('Castilla').scrollIntoView().click({ force: true });
+    cy.wait(500);
+    cy.get('paper-icon-button[icon="icons:create"]').click({ force: true });
+    cy.wait(1000);
+
+    cy.get('pb-authority-lookup').shadow().find('input#query').clear().type('Madrid');
+    cy.wait(1500);
+    cy.contains('li', 'Madrid').find('button[title="link to"]').click({ force: true });
+    cy.wait(1500); // selecting a candidate triggers a save round-trip (annotations/occurrences)
+
+    cy.get('input[name="key"]').should('have.value', 'Madrid');
+    cy.get('input[name="ref"]').should('have.value', 'geo-3117735');
+  });
+
+  // Sets up the linked state directly via XQuery rather than depending on the search-and-select
+  // test above having actually persisted its selection to the document -- confirmed separately
+  // (see the annotate_keymap_and_css_selector_bugs project memory) that Cypress's forced-click
+  // selection flow reliably updates the *form*, but does not reliably persist to the saved
+  // document for a re-selection of an already-annotated span, for any type including "person"
+  // (checked live: sermons/27004.xml's own Thurneysen persName, selected by the person suite's
+  // own passing test earlier in this same file, still has no @ref months into this project). A
+  // real, unforced user interaction does persist correctly (confirmed via a real, manually
+  // created entity in the "place" detail-popup fix itself), so this is a Cypress force-click
+  // limitation, not a product bug -- and orthogonal to what this specific test needs to check,
+  // which is only whether the detail popup correctly reads @ref once it's actually set.
+  it('the detail popup for a "place" linked via @ref shows the real preview, not "Entity not found"', () => {
+    const xq = `
+      declare namespace tei="http://www.tei-c.org/ns/1.0";
+      let $p := doc("/db/apps/tp-reconc/data/demo/CIDTC-3823-cortez.xml")//tei:placeName[contains(., "Castilla")][1]
+      return (
+        update insert attribute ref { "geo-3117735" } into $p,
+        update value $p/@key with "Madrid",
+        "done"
+      )
+    `;
+    cy.request({
+      method: 'POST',
+      url: 'http://localhost:8080/exist/rest/db',
+      auth,
+      headers: { 'Content-Type': 'application/xml' },
+      body: `<query xmlns="http://exist.sourceforge.net/NS/exist" wrap="no"><text><![CDATA[${xq}]]></text></query>`,
+    }).its('status').should('eq', 200);
+
+    cy.visit(annotateUrl, { auth });
+    cy.wait(4000);
+    cy.get('.annotation.authority').contains('Castilla').scrollIntoView().click({ force: true });
+    cy.wait(1000);
+
+    cy.get('.info').should(($info) => {
+      const text = $info.text();
+      expect(text, 'detail popup content').not.to.include('not found');
+      expect(text, 'detail popup content').to.include('Madrid');
+    });
+  });
+});
+
 // Regression coverage for a bug reported 2026-07-24: with fields="key=label,ref=id,..."
 // in effect (see the describe block above), clicking on an already-linked entity to view
 // its read-only detail popup showed "Entity not found" instead of the entity's actual
