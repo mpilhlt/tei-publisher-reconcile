@@ -308,6 +308,44 @@ describe('preview and view services', () => {
       })
   })
 
+  // Regression test for a bug reported 2026-07-24: the register-overview ODD
+  // transform's own link to the entity's registers page is relative
+  // (href="people/<id>"), which only ever resolves correctly if the preview HTML
+  // is rendered as its own document at that exact path. It isn't -- the
+  // annotate-editor client fetches this HTML and injects it into an existing
+  // page's DOM via innerHTML (tei-publisher-components' ReconciliationService.
+  // info()), so the relative link resolved against whatever page happened to
+  // have the preview open in it instead, e.g. producing ".../sermons/people/<id>"
+  // for a preview opened from within a sermon document.
+  it('the entity link in the preview is absolute, not resolved against whatever page embeds it', () => {
+    cy.api({ url: '/api/reconcile/preview', qs: { id: 'kbga-actors-136' } })
+      .then(({ body }) => {
+        const hrefs = [...body.matchAll(/href="([^"]+)"/g)].map((m) => m[1])
+        expect(hrefs.length, 'at least one link in the preview').to.be.greaterThan(0)
+        hrefs.forEach((href) => {
+          expect(href, `href "${href}" should be absolute`).to.match(/^([a-z]+:|#)/i)
+        })
+        expect(body).to.include('/people/kbga-actors-136')
+      })
+  })
+
+  it('lists every configured property with a real value for the entity, not just the register-overview transform', () => {
+    cy.api({ url: '/api/reconcile/preview', qs: { id: 'kbga-actors-27' } })
+      .then(({ body }) => {
+        expect(body).to.include('Gender')
+        expect(body).to.include('male')
+        expect(body).to.include('Biographical note')
+      })
+  })
+
+  it('renders a property whose value looks like an image as an <img>, not as text', () => {
+    cy.api({ url: '/api/reconcile/preview', qs: { id: 'kbga-actors-27' } })
+      .then(({ body }) => {
+        expect(body).to.include('Portrait')
+        expect(body).to.match(/<img[^>]+src="data:image\/svg\+xml;base64,/)
+      })
+  })
+
   it('GET /entity/{id} redirects to the real registers page for a person', () => {
     cy.api({ url: '/api/reconcile/entity/kbga-actors-136', followRedirect: false })
       .then(({ status, headers }) => {

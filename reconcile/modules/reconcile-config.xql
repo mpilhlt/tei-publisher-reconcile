@@ -177,6 +177,22 @@ declare variable $reconc-config:TYPES := map {
                         return string-length(normalize-space($title))
                     return if (exists($lengths)) then string(avg($lengths)) else ()
                 }
+            },
+            (: Illustrative placeholder, not real biographical data — a generic silhouette
+             : icon (a self-contained "data:image/svg+xml;base64,..." value, no external
+             : request involved), demonstrating that reconc:looks-like-image in
+             : reconcile-api.xql auto-detects an image-shaped property value and renders it
+             : as a thumbnail in the default /preview instead of as plain text — no "image"
+             : flag set here deliberately, to prove the heuristic itself does the work
+             : rather than an explicit override. A real deployment would point this at an
+             : actual portrait URL instead (a GND/Wikidata depicting-image field, a
+             : digitized-archive scan, etc.); set "image": false() on a property here to
+             : opt back out if a real URL value is ever misdetected as an image. :)
+            "portrait": map {
+                "name": "Portrait",
+                "value": function($e as element()) as xs:string* {
+                    "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCIgdmlld0JveD0iMCAwIDgwIDgwIj48Y2lyY2xlIGN4PSI0MCIgY3k9IjQwIiByPSI0MCIgZmlsbD0iI2NjYyIvPjxjaXJjbGUgY3g9IjQwIiBjeT0iMzAiIHI9IjE0IiBmaWxsPSIjZmZmIi8+PHBhdGggZD0iTTEyIDcwYzQtMTggMjAtMjYgMjgtMjZzMjQgOCAyOCAyNiIgZmlsbD0iI2ZmZiIvPjwvc3ZnPg=="
+                }
             }
         }
     },

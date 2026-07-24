@@ -626,10 +626,79 @@ declare function reconc:suggest-flyout($request as map(*)) {
         map { "id": $id, "html": ($html, "") [1] }
 };
 
+(:~ True if $value is a URL-shaped string that isn't already safe to embed as-is: not a
+ : full absolute URL (no "scheme://"), not already app-root-relative (leading "/"), and
+ : not one of the special schemes a browser resolves specially rather than against the
+ : current page (fragment-only "#...", "mailto:", "tel:", "javascript:", "data:"). Used
+ : by reconc:absolutize-links to decide which href/src values actually need rewriting —
+ : rewriting an already-safe value would be a no-op at best and wrong at worst (e.g.
+ : mangling a "data:image/..." value). :)
+declare %private function reconc:is-relative-url($value as xs:string) as xs:boolean {
+    not(
+        contains($value, "://") or
+        starts-with($value, "/") or
+        starts-with($value, "#") or
+        starts-with($value, "mailto:") or
+        starts-with($value, "tel:") or
+        starts-with($value, "javascript:") or
+        starts-with($value, "data:")
+    )
+};
+
+(:~ Rewrites every relative href/src found anywhere in $nodes to be absolute against
+ : $base. Needed because the preview HTML this module renders does not get consumed the
+ : way its own doc comment originally assumed ("meant to be embedded in an iframe", where
+ : a same-document relative link would at least resolve consistently against the preview
+ : URL itself) — the shipped annotate-editor client instead fetches this HTML and injects
+ : it directly into an existing page's DOM via innerHTML (see tei-publisher-components'
+ : ReconciliationService.info()), which does NOT parse/honor a <base> tag the way loading
+ : a full document would. A relative link like the "registers" profile's own
+ : register-overview transform emits (e.g. href="people/kbga-actors-27", correct only
+ : when rendered as part of a page already served AT that same path) then resolves
+ : against whatever page happens to have the preview injected into it instead — this is
+ : exactly the bug reported 2026-07-24: a preview shown inside a "/sermons/27004.xml"
+ : annotation page produced a link to ".../sermons/people/kbga-actors-27" instead of
+ : ".../people/kbga-actors-27". Rewriting the markup itself, rather than relying on
+ : <base>, is correct regardless of how a client chooses to embed the result. :)
+declare %private function reconc:absolutize-links($nodes as node()*, $base as xs:string) as node()* {
+    for $n in $nodes
+    return
+        typeswitch ($n)
+            case element() return
+                element { node-name($n) } {
+                    for $a in $n/@*
+                    return
+                        if (local-name($a) = ("href", "src") and reconc:is-relative-url($a)) then
+                            attribute { node-name($a) } { $base || "/" || $a }
+                        else
+                            $a,
+                    reconc:absolutize-links($n/node(), $base)
+                }
+            default return $n
+};
+
+(:~ Heuristic: does $value look like it points at an image rather than plain text? Used
+ : to decide whether a property's value(s) should be rendered as an <img> thumbnail in
+ : the default preview instead of as text — there is no way to know this for certain
+ : from a bare string alone (a property's "value" extractor returns xs:string*, not a
+ : typed/annotated value), so this is deliberately conservative: a "data:image/..." URI,
+ : or a URL whose path ends in a common image extension. A property definition can
+ : override the guess either way with an explicit "image": true()/false() — see
+ : reconc:render-html. :)
+declare %private function reconc:looks-like-image($value as xs:string) as xs:boolean {
+    starts-with($value, "data:image/") or
+    matches($value, "\.(jpe?g|png|gif|svg|webp|bmp|avif)(\?[^#]*)?(#.*)?$", "i")
+};
+
 (:~ Renders the preview/view HTML for a matched entity: the type's own "preview"
- : function-item if configured, otherwise the app's ODD web-transform pipeline
- : (the same one the "registers" profile itself uses) in the type's configured
- : "preview-mode" (default "register-overview"). :)
+ : function-item if configured (full control — used as-is, not post-processed), otherwise
+ : the app's ODD web-transform pipeline (the same one the "registers" profile itself
+ : uses) in the type's configured "preview-mode" (default "register-overview"), followed
+ : by every configured property that actually has a value for this entity — the same
+ : properties /extend and /extend/propose already expose, so nothing needs configuring
+ : twice. A property whose value(s) look like an image (see reconc:looks-like-image, or
+ : an explicit "image": true()/false() on the property definition to force the decision)
+ : renders as a thumbnail instead of text. :)
 declare %private function reconc:render-html($request as map(*), $found as map(*)?) as item()* {
     if (empty($found)) then
         <html><head><meta charset="UTF-8"/></head><body><p>Entity not found.</p></body></html>
@@ -642,13 +711,39 @@ declare %private function reconc:render-html($request as map(*), $found as map(*
             else
                 let $odd := head(($request?parameters?odd, $config:default-odd))
                 let $mode := head(($type-def?preview-mode, "register-overview"))
+                let $prop-rows :=
+                    for $p in reconc:properties-for-type($found?type-id)
+                    let $extractor := reconc-cond:resolve-extractor($p?value)
+                    let $values :=
+                        if (exists($extractor)) then
+                            for $v in $extractor($entity)
+                            let $s := normalize-space(string($v))
+                            where $s != ""
+                            return $s
+                        else
+                            ()
+                    where exists($values)
+                    let $is-image := ($p?image, reconc:looks-like-image($values[1]))[1]
+                    return
+                        <tr>
+                            <th style="text-align:left; vertical-align:top; padding-right:0.5em;">{$p?name}</th>
+                            <td>{
+                                if ($is-image) then
+                                    for $v in $values return <img src="{$v}" alt="{$p?name}" style="max-width:100%; max-height:8em;"/>
+                                else
+                                    string-join($values, "; ")
+                            }</td>
+                        </tr>
+                let $body :=
+                    <div class="reconcile-preview">
+                    { ($pm-config:web-transform)($entity, map { "mode": $mode }, $odd) }
+                    { if (exists($prop-rows)) then <table class="reconcile-preview-properties">{$prop-rows}</table> else () }
+                    </div>
                 return
                     <html>
                         <head><meta charset="UTF-8"/></head>
                         <body style="font-family: sans-serif; margin: 0.5em;">
-                        <div class="reconcile-preview">
-                        { ($pm-config:web-transform)($entity, map { "mode": $mode }, $odd) }
-                        </div>
+                        { reconc:absolutize-links($body, reconc:site-root($request)) }
                         </body>
                     </html>
 };
