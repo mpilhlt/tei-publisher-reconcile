@@ -422,10 +422,21 @@ a live demo you haven't personally rehearsed end-to-end.
 
 ## C. OpenRefine
 
-**Status (updated 2026-07-24): the batch bugs found on 2026-07-23 are fixed and covered
-by regression tests (see `openrefine_batch_bug` project memory) — re-verify with a real
-OpenRefine run when you get the chance, but curl-level repro of every known failure mode
-now returns correct, positionally-aligned results instead of 500s or shortened arrays.**
+**Status (updated 2026-07-24, confirmed against a real OpenRefine run): batch
+reconciliation now matches cleanly with zero errors** — the remaining root cause (a
+Lucene fuzzy-query crash on any label containing a parenthesized date range, e.g.
+"Goethe, Johann Wolfgang von (1749-1832)" — the overwhelming majority of this demo's
+person-register labels) is fixed; see `reconc-fulltext:fuzzy-query` and the
+`reconcile_lucene_daterange_bug` project memory. **"Add columns from reconciled
+values" (data extension) is also confirmed working end-to-end** — but only when the
+service is added with `?version=0.2` (see section below and the
+`reconcile-openrefine` doc section in `reconcile.xml`): OpenRefine's own client code
+has no path at all for the 1.0-draft manifest shape for this specific feature.
+**Not yet tested: passing an additional OpenRefine column as a property condition to
+help disambiguate same-named candidates during the initial reconciliation match**
+(as opposed to data extension, which runs *after* matching) — flagged for a future
+session below in "Known gaps"; needs test data with genuine same-name collisions to
+be meaningful.
 
 1. Install/open OpenRefine (tested with v3.10.0), create or open any project with a
    text column of names (e.g. a column containing "Goethe", "Dantiscus", "Madrid", ...).
@@ -460,16 +471,28 @@ malformed entry degrade to "zero candidates at its original position" instead, f
 wire formats — five new regression tests cover exactly these cases (`reconcile.cy.js`,
 describe block "malformed batch entries..."), plus the existing 31 tests and 24 XQSuite
 tests were re-verified green, including once after a full `jinks update --all`.
-**Not yet re-verified against real OpenRefine itself** — the curl-level repro is fixed,
-but re-running the exact failing column through OpenRefine would be good confirmation
-next time you have it open.
+**Re-verified against real OpenRefine 2026-07-24: zero errors, all rows matched**
+(after the separate Lucene date-range fix above — that was the actual remaining cause,
+not a leftover of the batch-shape bug itself).
 
-5. To try data extension: after reconciling, use **Edit column → Add columns from
-   reconciled values...** and pick one of the extend properties (gnd/gender/occupation
-   for person, geonames/wikidata for place) — this exercises `/extend` exactly like
-   the curl examples in section A. *(Not yet re-verified against the batch-error
-   findings above — test this on a column where reconciliation actually produced
-   matches.)*
+5. To try data extension: **add the service using `?version=0.2`** on the URL in step 3
+   above (OpenRefine's own client only understands the 0.2 manifest shape for this
+   feature — see the `reconcile-openrefine` doc section), then use **Edit column → Add
+   columns from reconciled values...** and pick one of the extend properties
+   (gnd/gender/occupation for person, geonames/wikidata for place) — this exercises
+   `/extend` exactly like the curl examples in section A. **Confirmed working
+   end-to-end 2026-07-24**, including the property list, the "Preview" panel, and
+   actually adding the column (see `reconcile_lucene_daterange_bug` project memory for
+   the three bugs found and fixed along the way: empty-string `type` handling, the
+   classic form-encoded `extend=` convention, and a flyout-preview 404 loop).
+6. **Not yet tested: reconciling with an additional property condition.** OpenRefine
+   lets you map a second spreadsheet column onto a reconciliation property (e.g. also
+   sending a birth year or a place, not just the name) to help disambiguate two
+   same-named candidates — this exercises the property-`conditions` matching path
+   (see "Matching on more than just a name" in `reconcile/doc/README.md`), not data
+   extension. Untested for lack of data with genuine same-name collisions in this
+   demo's registers; needs either better test data or a synthetic fixture with two
+   same-named person entries differing only in a property value.
 
 This is a good "does it actually work with the real ecosystem tool" check, distinct
 from both our own Cypress suite and the spec's own testbench — and this time it already
@@ -516,8 +539,20 @@ A ~5–8 minute walkthrough that shows the interesting parts, roughly in order o
   batch entries (null/scalar queries, non-numeric `limit`) used to either 500 the whole
   request or silently misalign results; both wire formats now degrade a bad entry to
   "zero candidates at its correct position" instead. Covered by 5 new Cypress tests.
-  **Still worth a real OpenRefine re-run** to confirm the actual ecosystem client is
-  happy, not just the curl-level repro.
+  **Re-verified against real OpenRefine 2026-07-24 — zero errors.** (The 88-errors run
+  originally reported turned out to have a second, separate cause — see next item.)
+- **OpenRefine Lucene date-range crash + data-extension bugs (section C) — fixed
+  2026-07-24.** Any reconciled label containing a parenthesized date range (the
+  overwhelming majority of this demo's person names) 500'd the fulltext pre-filter;
+  this, not the batch-shape bug above, was the actual cause of "10/90 matched" in real
+  use. Also fixed three bugs blocking "Add columns from reconciled values" under
+  `?version=0.2`: empty-string `type` handling in `/extend/propose`, the classic
+  form-encoded `extend=` POST convention OpenRefine's client actually uses (not the
+  1.0-draft `POST /extend` route), and a flyout-preview 404 loop. See
+  `reconcile_lucene_daterange_bug` project memory. **Not yet tested: reconciling with
+  an additional property condition for disambiguation** (mapping a second OpenRefine
+  column onto a property, not data extension) — no test data with genuine same-name
+  collisions available yet; needs either better source data or a synthetic fixture.
 - **Annotate-editor click-through** (B3 above) — **fully fixed and verified 2026-07-24,
   no open items left.** Verified from a truly fresh app creation (deleted `tp-reconc`
   completely, `jinks create`'d again, screenshotted): the `XQDY0025` core bug
