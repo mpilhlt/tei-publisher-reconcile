@@ -167,7 +167,8 @@
                 "parameters": [
                     { "name": "prefix", "in": "query", "schema": { "type": "string" } },
                     { "name": "type", "in": "query", "schema": { "type": "string" } },
-                    { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 10 } }
+                    { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 10 } },
+                    { "name": "version", "in": "query", "description": "Accepted for parity with the 0.2 manifest's suggest.entity.service_path, which always includes it; currently has no effect on the response shape.", "schema": { "type": "string" } }
                 ],
                 "responses": {
                     "200": {
@@ -186,7 +187,8 @@
                 "parameters": [
                     { "name": "prefix", "in": "query", "schema": { "type": "string" } },
                     { "name": "type", "in": "query", "schema": { "type": "string" } },
-                    { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }
+                    { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+                    { "name": "version", "in": "query", "description": "Accepted for parity with the 0.2 manifest's suggest.property.service_path, which always includes it; currently has no effect on the response shape.", "schema": { "type": "string" } }
                 ],
                 "responses": {
                     "200": {
@@ -204,7 +206,8 @@
                 "operationId": "reconc:suggest-type",
                 "parameters": [
                     { "name": "prefix", "in": "query", "schema": { "type": "string" } },
-                    { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }
+                    { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+                    { "name": "version", "in": "query", "description": "Accepted for parity with the 0.2 manifest's suggest.type.service_path, which always includes it; currently has no effect on the response shape.", "schema": { "type": "string" } }
                 ],
                 "responses": {
                     "200": {
@@ -222,7 +225,8 @@
                 "operationId": "reconc:suggest-flyout",
                 "parameters": [
                     { "name": "kind", "in": "query", "schema": { "type": "string", "enum": ["entity", "property", "type"] } },
-                    { "name": "id", "in": "query", "required": true, "schema": { "type": "string" } }
+                    { "name": "id", "in": "query", "required": true, "schema": { "type": "string" } },
+                    { "name": "version", "in": "query", "description": "Accepted for parity with the 0.2 manifest's flyout_service_path, which always includes it; currently has no effect on the response shape.", "schema": { "type": "string" } }
                 ],
                 "responses": {
                     "200": {
@@ -239,7 +243,8 @@
                 "tags": ["reconcile"],
                 "operationId": "reconc:preview",
                 "parameters": [
-                    { "name": "id", "in": "query", "required": true, "schema": { "type": "string" } }
+                    { "name": "id", "in": "query", "required": true, "schema": { "type": "string" } },
+                    { "name": "version", "in": "query", "description": "Accepted for parity with the 0.2 manifest's preview.url, which always includes it; currently has no effect on the response.", "schema": { "type": "string" } }
                 ],
                 "responses": {
                     "200": {
@@ -256,7 +261,8 @@
                 "tags": ["reconcile"],
                 "operationId": "reconc:entity",
                 "parameters": [
-                    { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+                    { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+                    { "name": "version", "in": "query", "description": "Accepted for parity with the 0.2 manifest's view.url, which always includes it; currently has no effect on the response.", "schema": { "type": "string" } }
                 ],
                 "responses": {
                     "200": {
@@ -307,7 +313,8 @@
                 "operationId": "reconc:extend-propose",
                 "parameters": [
                     { "name": "type", "in": "query", "schema": { "type": "string" } },
-                    { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } }
+                    { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+                    { "name": "version", "in": "query", "description": "Accepted for parity with the 0.2 manifest's extend.propose_properties.service_path, which always includes it; currently has no effect on the response shape.", "schema": { "type": "string" } }
                 ],
                 "responses": {
                     "200": {

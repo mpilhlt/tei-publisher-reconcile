@@ -329,29 +329,41 @@ declare %private function reconc:manifest-response($request as map(*)) {
                 "identifierSpace": "https://teipublisher.com/register/id/",
                 "schemaSpace": "https://teipublisher.com/register/schema/",
                 "defaultTypes": $default-types,
+                (: Every sub-service URL below carries "?version=0.2" explicitly, even
+                 : though none of these particular endpoints currently behave any
+                 : differently with or without it (their response schemas are identical
+                 : supersets between 0.2 and 1.0-draft — see reconcile_manifest_versioning
+                 : project memory for how manifest.json/reconciliation-result-batch.json
+                 : etc. compare). Since this profile serves both protocol versions from the
+                 : very same routes, distinguished only by this query parameter, a strict
+                 : 0.2 client that resolves every URL from the 0.2 manifest it just fetched
+                 : should consistently stay in "0.2 mode" rather than silently falling back
+                 : to the (different) 1.0-draft default the bare URL would otherwise imply —
+                 : cheap to keep correct now, and avoids a latent version-mixing bug if any
+                 : of these responses ever do diverge behaviorally by version later. :)
                 "view": map {
-                    "url": $base || "/entity/{{id}}"
+                    "url": $base || "/entity/{{id}}?version=0.2"
                 },
                 "preview": map {
-                    "url": $base || "/preview?id={{id}}",
+                    "url": $base || "/preview?id={{id}}&amp;version=0.2",
                     "width": 400,
                     "height": 300
                 },
-                (: Every suggest.* entry declares its own flyout_service_path even though the
-                 : 0.2 spec says its *absence* should mean "no flyout service" — OpenRefine's
-                 : own vendored suggest widget (externals/suggest/suggest-4_3a.js) does not
-                 : honor that: it silently falls back to its own hardcoded legacy Freebase
-                 : default ("/search...") whenever flyout_service_path isn't given, which
-                 : 404s against OUR base URL instead of just doing nothing. Declaring a real
-                 : flyout_service_path here is the only way to stop that; see
+                (: Every suggest.* entry also declares its own flyout_service_path even
+                 : though the 0.2 spec says its *absence* should mean "no flyout service" —
+                 : OpenRefine's own vendored suggest widget (externals/suggest/suggest-4_3a.js)
+                 : does not honor that: it silently falls back to its own hardcoded legacy
+                 : Freebase default ("/search...") whenever flyout_service_path isn't given,
+                 : which 404s against OUR base URL instead of just doing nothing. Declaring a
+                 : real flyout_service_path here is the only way to stop that; see
                  : reconc:suggest-flyout's own doc comment for how this was found. :)
                 "suggest": map {
-                    "entity": map { "service_url": $base, "service_path": "/suggest/entity", "flyout_service_path": "/suggest/flyout?kind=entity&amp;id=${id}" },
-                    "type": map { "service_url": $base, "service_path": "/suggest/type", "flyout_service_path": "/suggest/flyout?kind=type&amp;id=${id}" },
-                    "property": map { "service_url": $base, "service_path": "/suggest/property", "flyout_service_path": "/suggest/flyout?kind=property&amp;id=${id}" }
+                    "entity": map { "service_url": $base, "service_path": "/suggest/entity?version=0.2", "flyout_service_path": "/suggest/flyout?kind=entity&amp;id=${id}&amp;version=0.2" },
+                    "type": map { "service_url": $base, "service_path": "/suggest/type?version=0.2", "flyout_service_path": "/suggest/flyout?kind=type&amp;id=${id}&amp;version=0.2" },
+                    "property": map { "service_url": $base, "service_path": "/suggest/property?version=0.2", "flyout_service_path": "/suggest/flyout?kind=property&amp;id=${id}&amp;version=0.2" }
                 },
                 "extend": map {
-                    "propose_properties": map { "service_url": $base, "service_path": "/extend/propose" }
+                    "propose_properties": map { "service_url": $base, "service_path": "/extend/propose?version=0.2" }
                 }
             }
         else
