@@ -202,6 +202,41 @@ jinks create tp-reconc -c /tmp/tp-reconc-app-config.json -s http://localhost:808
 your app-level config — swap it if you used a different one). The `reconcile` profile registration
 itself (§2a) is untouched by this and doesn't need redoing.
 
+**2d. Optional — developing the server and the web client in tandem (local webcomponents).** By
+default every generated app loads `pb-components`/`pb-authority-lookup`/etc. from the public jsDelivr
+CDN, pinned to a released version — a locally-edited `./tei-publisher-components` checkout is **not**
+served to the browser just because you're editing it. Point the app at a local dev server instead
+when you want changes there (e.g. a connector class like `ReconciliationService`) to show up live in
+`tp-reconc` without publishing/tagging a new npm release first. Nothing here gets pushed anywhere —
+it's a local dev-loop convenience, not deploy/package config.
+
+1. Start the dev server (serves the raw `src/` tree unbundled; CORS for this project's
+   `http://localhost:8080` is already hardcoded into the repo's own `es-dev-server.config.js`):
+   ```bash
+   cd tei-publisher-components
+   npx es-dev-server --config es-dev-server.config.js --port 8000   # leave running; add --open false if headless
+   ```
+   Verify it's actually serving real content, not an error page: `curl -s
+   http://localhost:8000/src/pb-components-bundle.js | head -c 100`.
+2. Add a `"script"` override to the app-level config (the `-c` file from §2b/§2c) and re-apply with
+   `jinks update tp-reconc -c ...` — same `-c`-not-bare-`update` requirement as the theme/profile
+   changes above:
+   ```json
+   "script": { "webcomponents": "dev", "cdn": "http://localhost:8000" }
+   ```
+   `"webcomponents": "dev"` makes the generated `<head>` load
+   `http://localhost:8000/src/pb-components-bundle.js` (raw ES module) instead of the CDN's built
+   `dist/pb-components-bundle.js` — see `tei-publisher-jinks/profiles/base10/templates/layouts/
+   base.html`. Verify it took effect:
+   ```bash
+   curl -s http://localhost:8080/exist/apps/tp-reconc/places | grep -o '<script[^>]*pb-components[^>]*>'
+   ```
+   should show `src="http://localhost:8000/..."`, not `cdn.jsdelivr.net`. (Note: the app's bare `/`
+   root page doesn't use this layout at all — check a real content page like `/places` or the
+   annotate editor, not `/`, when verifying.)
+3. To switch back to the CDN, re-apply a config without the `"script"` override (or with the stock
+   `"webcomponents": "<version>"`/jsDelivr `"cdn"` values) and re-run `jinks update -c` again.
+
 ---
 
 ## 3. Everyday commands reference

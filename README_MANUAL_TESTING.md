@@ -401,6 +401,15 @@ covered by an automated regression test — see
 connector correctly itself in a `before()` hook, so it doesn't depend on this manual
 edit having been applied first).
 
+**Developing the client and server together:** by default the browser loads
+`tei-publisher-components` from the CDN, so edits to your local checkout (e.g. another
+connector class, or a UI tweak) won't show up in `tp-reconc` until you either publish a
+new npm version or point the app at a local dev server instead — see
+`README_TEST_CONTAINER.md` §2d for the exact `es-dev-server` + app-config recipe.
+Confirmed working 2026-07-24: after fixing the "OpenReconcile" badge label in
+`tei-publisher-components` locally, pointing `tp-reconc` at the local dev server showed
+the updated "Reconciliation" label live, without touching the CDN version at all.
+
 **5. Open question (not yet answered):** how to define an additional extendable
 property computed from an XPath over *all documents* — e.g. "every document URL where
 this entity occurs." Today's `properties` config entries extract from a single entity
