@@ -153,7 +153,31 @@ declare variable $reconc-config:TYPES := map {
             "gender": map { "name": "Gender", "value": function($e as element()) as xs:string* { normalize-space($e/tei:gender[1]) } },
             "note": map { "name": "Biographical note", "value": function($e as element()) as xs:string* { normalize-space($e/tei:note[1]) } },
             "occupation": map { "name": "Occupation", "value": function($e as element()) as xs:string* { $e/tei:occupation/string() } },
-            "gnd": map { "name": "GND identifier", "value": function($e as element()) as xs:string* { reconc-config:gnd-uri-from-id($e/@xml:id/string()) } }
+            "gnd": map { "name": "GND identifier", "value": function($e as element()) as xs:string* { reconc-config:gnd-uri-from-id($e/@xml:id/string()) } },
+            (: Worked example of a property computed from OUTSIDE the entity itself — not
+             : extracted from the register record, but derived by querying the document
+             : corpus for every place this person is actually referenced (persName/@key
+             : matching this entity's own @xml:id, the convention this demo's own TEI
+             : documents already use) and aggregating over the results. A property's
+             : "value" is always a plain function($entity as element()) as xs:string* —
+             : nothing about the reconciliation protocol restricts it to reading the
+             : entity's own subtree; it runs with full XQuery/collection access like any
+             : other function in this module, so anything expressible in XQuery (a join,
+             : an aggregate, a call to an external service) is fair game here. Kept
+             : cheap deliberately: sums document-level title lengths already in memory
+             : rather than anything requiring its own index. :)
+            "avg-title-length": map {
+                "name": "Average title length of documents mentioning this person",
+                "value": function($e as element()) as xs:string* {
+                    let $id := $e/@xml:id/string()
+                    let $lengths :=
+                        for $doc in collection($config:data-root)//tei:persName[@key = $id]/root()
+                        let $title := $doc//tei:titleStmt/tei:title[1]
+                        where exists($title)
+                        return string-length(normalize-space($title))
+                    return if (exists($lengths)) then string(avg($lengths)) else ()
+                }
+            }
         }
     },
     "place": map {
