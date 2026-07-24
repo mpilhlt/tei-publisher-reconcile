@@ -337,10 +337,18 @@ declare %private function reconc:manifest-response($request as map(*)) {
                     "width": 400,
                     "height": 300
                 },
+                (: Every suggest.* entry declares its own flyout_service_path even though the
+                 : 0.2 spec says its *absence* should mean "no flyout service" — OpenRefine's
+                 : own vendored suggest widget (externals/suggest/suggest-4_3a.js) does not
+                 : honor that: it silently falls back to its own hardcoded legacy Freebase
+                 : default ("/search...") whenever flyout_service_path isn't given, which
+                 : 404s against OUR base URL instead of just doing nothing. Declaring a real
+                 : flyout_service_path here is the only way to stop that; see
+                 : reconc:suggest-flyout's own doc comment for how this was found. :)
                 "suggest": map {
-                    "entity": map { "service_url": $base, "service_path": "/suggest/entity" },
-                    "type": map { "service_url": $base, "service_path": "/suggest/type" },
-                    "property": map { "service_url": $base, "service_path": "/suggest/property" }
+                    "entity": map { "service_url": $base, "service_path": "/suggest/entity", "flyout_service_path": "/suggest/flyout?kind=entity&amp;id=${id}" },
+                    "type": map { "service_url": $base, "service_path": "/suggest/type", "flyout_service_path": "/suggest/flyout?kind=type&amp;id=${id}" },
+                    "property": map { "service_url": $base, "service_path": "/suggest/property", "flyout_service_path": "/suggest/flyout?kind=property&amp;id=${id}" }
                 },
                 "extend": map {
                     "propose_properties": map { "service_url": $base, "service_path": "/extend/propose" }
@@ -464,20 +472,35 @@ declare %private function reconc:reconcile-0.2($query-map as map(*)) as map(*) {
  :)
 declare function reconc:reconcile($request as map(*)) {
     let $raw-body := $request?body
-    let $body :=
-        (: application/x-www-form-urlencoded: body is {"queries": "<json string>"} — the
-         : classic OpenRefine 0.2 wire format still used by the local 0.2 test bench. :)
-        if ($raw-body?queries instance of xs:string) then
-            map { "queries": parse-json($raw-body?queries) }
-        else
-            $raw-body
     return
-        if (map:contains($body, "queries") and $body?queries instance of array(*)) then
-            reconc:reconcile-1.0($body)
-        else if (map:contains($body, "queries")) then
-            reconc:reconcile-0.2($body?queries)
+        (: application/x-www-form-urlencoded body {"extend": "<json string>"} — the classic
+         : data-extension convention OpenRefine's own Java client actually uses (POST to the
+         : base endpoint with a form field named "extend"), distinct from the 1.0-draft
+         : canonical POST /extend route with a JSON body. Confirmed against OpenRefine's
+         : ReconciledDataExtensionJob.postExtendQuery, which does exactly this — POSTs
+         : name="extend" to the plain reconciliation endpoint, not to "/extend". Without this
+         : check the form body was falling through to reconc:reconcile-0.2 and being
+         : misinterpreted as a batch of one bogus query keyed "extend", silently producing a
+         : nonsense 200 response instead of real property values — which is what surfaced in
+         : OpenRefine as "Preview: Error" and a data-extension job that never finished. :)
+        if ($raw-body?extend instance of xs:string) then
+            reconc:extend-response(parse-json($raw-body?extend), $request?parameters?version)
         else
-            reconc:reconcile-0.2($body)
+            let $body :=
+                (: application/x-www-form-urlencoded: body is {"queries": "<json string>"} —
+                 : the classic OpenRefine 0.2 wire format still used by the local 0.2 test
+                 : bench. :)
+                if ($raw-body?queries instance of xs:string) then
+                    map { "queries": parse-json($raw-body?queries) }
+                else
+                    $raw-body
+            return
+                if (map:contains($body, "queries") and $body?queries instance of array(*)) then
+                    reconc:reconcile-1.0($body)
+                else if (map:contains($body, "queries")) then
+                    reconc:reconcile-0.2($body?queries)
+                else
+                    reconc:reconcile-0.2($body)
 };
 
 (:~
@@ -503,8 +526,15 @@ declare function reconc:suggest-entity($request as map(*)) {
         }
 };
 
-(:~ All {id, name, value, type-id} properties across all types, or just for one type id if given. :)
+(:~ All {id, name, value, type-id} properties across all types, or just for one type id if given.
+ : Treats an empty-string $type-id the same as an absent one (all types) rather than a literal
+ : filter that can never match: OpenRefine's own "Add columns from reconciled values" dialog
+ : (add-column-by-reconciliation.js) always sends a "type" query parameter, and falls back to
+ : "" — never omitting it — whenever the column's own reconConfig didn't record a specific
+ : type, so treating "" as a real, non-matching filter silently produced zero properties for
+ : exactly that (common) case. :)
 declare %private function reconc:properties-for-type($type-id as xs:string?) as map(*)* {
+    let $type-id := ($type-id[normalize-space(.) != ""])
     let $types := if (exists($type-id)) then ($type-id) else map:keys($reconc-config:TYPES)
     for $t in $types
     let $props := $reconc-config:TYPES?($t)?properties
@@ -547,6 +577,41 @@ declare function reconc:suggest-type($request as map(*)) {
         })
     return
         map { "result": array { subsequence($matches, 1, max(($limit, 0))) } }
+};
+
+(:~
+ : Small HTML preview ("flyout") for a suggested entity, property, or type — shown by
+ : OpenRefine's autocomplete widget on hover. GET /api/reconcile/suggest/flyout?kind=
+ : (entity|property|type)&id=...
+ :
+ : Not part of the 1.0-draft spec (superseded there by the dedicated /preview route for
+ : entities; properties/types have no 1.0-draft flyout equivalent at all), but required
+ : for 0.2: OpenRefine's own vendored suggest widget (externals/suggest/suggest-4_3a.js)
+ : does not follow the 0.2 spec's documented "absence of flyout_service_path means no
+ : flyout service" rule — it falls back to its own hardcoded legacy Freebase default
+ : (a "/search" sub-path) whenever a suggest config doesn't declare flyout_service_path
+ : itself, silently querying (and 404ing against) OUR base URL + "/search" instead of
+ : just doing nothing. Declaring an explicit flyout_service_path for every 0.2
+ : suggest.{entity,property,type} object is the only way to stop that. Confirmed live:
+ : this exact 404 loop is what appeared in the server log immediately after selecting a
+ : property in OpenRefine's "Add columns from reconciled values" dialog.
+ :)
+declare function reconc:suggest-flyout($request as map(*)) {
+    let $kind := $request?parameters?kind
+    let $id := $request?parameters?id
+    let $html :=
+        switch ($kind)
+        case "property" return
+            let $prop := reconc:property-by-id($id)
+            return if (exists($prop)) then "<p>" || $prop?name || "</p>" else ()
+        case "type" return
+            let $type := $reconc-config:TYPES?($id)
+            return if (exists($type)) then "<p>" || $type?name || "</p>" else ()
+        default return
+            let $found := reconc:entity-by-id($id)
+            return if (exists($found)) then "<p>" || reconc:label($found?entity, $found?type-id) || "</p>" else ()
+    return
+        map { "id": $id, "html": ($html, "") [1] }
 };
 
 (:~ Renders the preview/view HTML for a matched entity: the type's own "preview"
@@ -718,6 +783,7 @@ declare function reconc:extend-propose($request as map(*)) {
     let $type := $request?parameters?type
     let $limit := ($request?parameters?limit, 20)[1]
     let $props := subsequence(reconc:properties-for-type($type), 1, max(($limit, 0)))
+    let $log := util:log("warn", "reconc:extend-propose called with type=" || serialize($type) || " limit=" || serialize($limit) || " -> " || count($props) || " properties; all-params=" || serialize($request?parameters))
     return
         map:merge((
             map {
