@@ -40,14 +40,18 @@ work continues so a future session/you-after-a-break can reorient in 30 seconds.
   most important — a real, previously-uncaught **batch reconciliation bug** surfaced by
   OpenRefine (5 matches / 88 errors on a real column). None of this was caught by
   Cypress/the testbench, since both only exercise single/small-batch queries.
-- **2026-07-24 follow-up:** the OpenRefine batch bug is fixed (see §C). The `XQDY0025`
-  annotate-view crash is fixed upstream in `tei-publisher-lib` 6.1.1 (see §B3), and a
-  second, separate bug it exposed — `tp-reconc`'s incomplete `annotation-config.xqm` —
-  is fixed by copying the working version from `tp-workbench`. Both fixes verified
-  directly against the actual crash code paths, not just "page loads." `tp-reconc` is
-  currently running the extended config (`annotate`/`upload`/`jinntap`/`theme-base10`
-  active) — see §B3/§2c in `README_TEST_CONTAINER.md` if you need to reproduce this
-  state after a reset.
+- **2026-07-24 follow-up:** every problem found during manual testing is now fixed and
+  verified — the OpenRefine batch bug (§C), the `XQDY0025` annotate-view crash (fixed
+  upstream in `tei-publisher-lib` 6.1.1, §B3), the incomplete `annotation-config.xqm`
+  (turned out to be session-specific stale state, not reproducible from a fresh app),
+  and the Reconciliation connector silently falling back to `metagrid.ch` (root cause:
+  `createConnectors()`'s unrecognized-connector-name fallback — needs the exact
+  `connector="ReconciliationService"`). All fixes verified directly against the actual
+  crash/bug code paths, not just "page loads" — including a new automated GUI test,
+  `reconcile/test/cypress/e2e/gui/annotate-reconciliation.cy.js`, covering the full tag
+  → search → select flow in a real browser. `tp-reconc` is currently running the
+  extended config (`annotate`/`upload`/`jinntap`/`theme-base10` active) — see §B3/§2c in
+  `README_TEST_CONTAINER.md` if you need to reproduce this state after a reset.
 - Latest commits: `tei-publisher-reconcile@54389e8` (main), `tei-publisher-app@753f1ad6`
   (feature/reconcile), `tei-publisher-jinks@0045e4a7` (feature/reconcile) — all pushed,
   all three working trees clean.
@@ -373,20 +377,29 @@ fresh app just works. No fix needed in `tei-publisher-jinks`; nothing to file up
    — not a bookmarkable standalone URL independent of the document; you always go via
    the document viewer's Admin menu, not a direct `annotate.html?doc=...` link.
 
-**4. Open bug: the Reconciliation connector doesn't call our local endpoint.** After
-disabling all entity annotations except **person** and configuring the `person`
-authority with a **Reconciliation** connector pointed at the local endpoint (edited
-directly into the generated `templates/pages/annotate.html`), lookups still went to
-`https://api.metagrid.ch/search?query=<highlightedTextPassage>` instead of `localhost`.
-Not yet root-caused. Candidates to check next:
-- the edit landed in the wrong generated copy — compare against `annotate-tei.html`/
-  `annotate-jats.html`, which are already pre-configured with
-  `endpoint="/exist/apps/tp-reconc/api/reconcile"` (see the note in "Where things stand"
-  above) and may be what's actually served for this document type;
-- a stale/cached webcomponents bundle rather than a config-wiring bug — try pointing
-  `$config:webcomponents` in `modules/config.xqm` at a locally-served
-  `tei-publisher-components` build instead (see the `local_components_dev_server`
-  project memory) and see if the connector config takes effect there.
+**4. Root-caused and fixed 2026-07-24: the Reconciliation connector fell back to
+Metagrid.** Configuring the `person` authority with a connector pointed at the local
+endpoint still queried `https://api.metagrid.ch/search?query=...` instead of
+`localhost`. Root cause: `tei-publisher-components/src/authority/connectors.js`'s
+`createConnectors()` `switch` on the `connector` attribute has a silent `default` case
+that falls back to the unrelated `Metagrid` connector for **any** unrecognized value —
+including a very natural typo like `connector="Reconciliation"` instead of the exact,
+case-sensitive `connector="ReconciliationService"`. No error, no warning, just silently
+the wrong service. Fix: use the exact connector name, plus its `endpoint` attribute:
+```xml
+<pb-authority connector="ReconciliationService" name="person"
+    endpoint="/exist/apps/tp-reconc/api/reconcile" type="person" edit=""/>
+```
+(replacing the default `connector="Custom"` wrapping a `GND` connector for `person` —
+see `templates/pages/annotate.html`). Verified end-to-end in a real browser (Cypress +
+Chromium): clicking a tagged person entity → edit icon → the search panel fires a
+request that lands on `tp-reconc/api/reconcile` (confirmed via network interception,
+not just "no error") → a real candidate from our own demo data is returned and
+rendered → selecting it links the entity to that candidate's id. This flow is now
+covered by an automated regression test — see
+`reconcile/test/cypress/e2e/gui/annotate-reconciliation.cy.js` (also wires the
+connector correctly itself in a `before()` hook, so it doesn't depend on this manual
+edit having been applied first).
 
 **5. Open question (not yet answered):** how to define an additional extendable
 property computed from an XPath over *all documents* — e.g. "every document URL where
@@ -481,9 +494,10 @@ A ~5–8 minute walkthrough that shows the interesting parts, roughly in order o
 7. **The official testbench** (section B1) running its full conformance suite green
    against our server, for both spec versions — "this isn't just self-reported, it's
    validated against the spec authors' own tooling."
-8. *(If you got B3 working ahead of time)* the annotation editor doing this inline
-   while editing a TEI document — the most visually compelling one, but only show it
-   if you've rehearsed it, since it's the one path not yet verified end-to-end.
+8. **The annotation editor doing this inline** while editing a TEI document (§B3) — the
+   most visually compelling one, now verified end-to-end (see §B3's 2026-07-24 update
+   and `annotate-reconciliation.cy.js`): click a tagged person entity, hit edit, watch
+   the search hit our own `/api/reconcile`, select the candidate it returns.
 
 ---
 
@@ -495,16 +509,18 @@ A ~5–8 minute walkthrough that shows the interesting parts, roughly in order o
   "zero candidates at its correct position" instead. Covered by 5 new Cypress tests.
   **Still worth a real OpenRefine re-run** to confirm the actual ecosystem client is
   happy, not just the curl-level repro.
-- **Annotate-editor click-through** (B3 above) — **fixed 2026-07-24 and verified from a
-  truly fresh app creation** (deleted `tp-reconc` completely, `jinks create`'d again,
-  screenshotted): the `XQDY0025` core bug (tei-publisher-lib 6.1.1) is fixed and applies
-  automatically to any new app with no extra steps; the "missing `annotation-config.xqm`
-  functions" issue turned out to be session-specific stale state in one app, not a real
-  bug — a fresh create already produces a byte-identical, working copy to
-  `tp-workbench`'s, no manual copy needed. Layout is clean too (no giant icons) with the
-  theme in the `-c` config from the start. Still open: the Reconciliation connector was
-  observed querying `https://api.metagrid.ch/...` instead of the local endpoint — not
-  yet re-tested now that the app actually loads correctly (see B3).
+- **Annotate-editor click-through** (B3 above) — **fully fixed and verified 2026-07-24,
+  no open items left.** Verified from a truly fresh app creation (deleted `tp-reconc`
+  completely, `jinks create`'d again, screenshotted): the `XQDY0025` core bug
+  (tei-publisher-lib 6.1.1) applies automatically to any new app with no extra steps;
+  the "missing `annotation-config.xqm` functions" issue was session-specific stale
+  state, not a real bug — a fresh create already produces a working copy; layout is
+  clean with the theme in the `-c` config from the start. The Reconciliation connector
+  querying `metagrid.ch` was also root-caused and fixed: `createConnectors()` silently
+  falls back to `Metagrid` for any unrecognized `connector` attribute value — the exact
+  string must be `connector="ReconciliationService"`. All of it is now covered by
+  `reconcile/test/cypress/e2e/gui/annotate-reconciliation.cy.js`, an automated
+  regression test for the full click → search → select flow against our own endpoint.
 - Extending a property via an arbitrary XPath (e.g. "all document URLs where this
   entity occurs") isn't supported by the current `properties` config shape — open
   design question, not started.

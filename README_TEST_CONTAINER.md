@@ -320,6 +320,28 @@ the same way (defaults: `http://localhost:8080/exist/apps/jinks` / `tei` / `simp
   isn't — the Jinks server's own bundled `annotate` profile is a plain, non-templated, already-working
   copy; the templated `features.annotate.configs` design only exists in this project's unrelated,
   never-deployed local `./tei-publisher-jinks` git checkout).
+- **The annotation editor's Reconciliation connector queries `https://api.metagrid.ch/...` instead of
+  the local endpoint** — this is not a bug in this profile's server code; it's `annotate.html`'s
+  default `person` authority wiring (`connector="Custom"` → `GND`), plus a silent footgun in
+  `tei-publisher-components`'s `createConnectors()`: **any** unrecognized `connector` attribute value
+  (e.g. the natural-seeming typo `connector="Reconciliation"`) falls back to the unrelated `Metagrid`
+  connector with no error at all. Fix — wire `person` (or whichever type you're demoing) to the exact,
+  case-sensitive connector name, directly in the generated app's `templates/pages/annotate.html`:
+  ```bash
+  cat > /tmp/fix-person-authority.xq <<'EOF'
+  declare namespace html="http://www.w3.org/1999/xhtml";
+  let $doc := doc("/db/apps/tp-reconc/templates/pages/annotate.html")
+  let $person := $doc//*[local-name() = 'pb-authority'][@name = 'person']
+  return update replace $person with
+      <pb-authority connector="ReconciliationService" name="person"
+          endpoint="/exist/apps/tp-reconc/api/reconcile" type="person" edit=""/>
+  EOF
+  EXISTDB_USER=tei EXISTDB_PASS=simple skills/teipublisher-reconciliation-testing/scripts/ad-hoc-xquery.sh /tmp/fix-person-authority.xq
+  ```
+  Covered by an automated regression test now, so it won't silently regress unnoticed again:
+  `reconcile/test/cypress/e2e/gui/annotate-reconciliation.cy.js` (its own `before()` hook applies this
+  same fix idempotently, so the test doesn't depend on this manual step having been run first — but a
+  human clicking through the editor still needs it applied, since only the test runs the hook).
 - **Container image won't pull / "short-name resolution" error** — this host's rootless podman has
   no `docker.io` alias; always use the fully-qualified `docker.io/existdb/teipublisher:10.0.0` (which
   is what `up.sh` already defaults to — only relevant if you invoke `podman run`/`pull` yourself).
