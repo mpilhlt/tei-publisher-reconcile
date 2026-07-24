@@ -34,19 +34,25 @@ describe('Web annotation editor: reconciling an entity against our own endpoint'
 
   before(() => {
     // Idempotently wire the "person" authority to our own ReconciliationService
-    // connector. The stock annotate profile default is connector="Custom" (GND) for
-    // person, not reconciliation -- this is a required one-time app customization for
-    // this demo, not optional tuning (see README_TEST_CONTAINER.md §2c/§4).
+    // connector, and configure `fields` (see tei-publisher-components' Registry.
+    // buildProperties/parseFieldsConfig) so a selected match's escaped name, id, and
+    // (fetched via /extend) GND identifier land in three separate output attributes
+    // instead of the id alone going to the reference/key field -- this is a required
+    // one-time app customization for this demo, not optional tuning (see
+    // README_TEST_CONTAINER.md §2c/§4). Setting `fields` here does not break the
+    // existing id-only assertions below: they only check that SOME input holds the
+    // expected id, which the new @ref-mapped hidden field still satisfies.
     const xq = `
       declare namespace html="http://www.w3.org/1999/xhtml";
       let $doc := doc("/db/apps/tp-reconc/templates/pages/annotate.html")
       let $person := $doc//*[local-name() = 'pb-authority'][@name = 'person']
       return
-        if ($person/@connector = "ReconciliationService") then "already-wired"
+        if ($person/@fields = "key=label,ref=id,gnd=extend:gnd") then "already-wired"
         else (
           update replace $person with
             <pb-authority connector="ReconciliationService" name="person"
-              endpoint="/exist/apps/tp-reconc/api/reconcile" type="person" edit=""/>,
+              endpoint="/exist/apps/tp-reconc/api/reconcile" type="person" edit=""
+              fields="key=label,ref=id,gnd=extend:gnd"/>,
           "updated"
         )
     `;
@@ -103,7 +109,13 @@ describe('Web annotation editor: reconciling an entity against our own endpoint'
     cy.get('paper-icon-button[icon="icons:create"]').click({ force: true });
     cy.wait('@reconcile');
 
-    cy.contains('Thurneysen, Eduard (1888-1974)').click({ force: true });
+    // Select via the dedicated "link to" button, not the candidate's label text: when
+    // the service's manifest resolves a view URL for the candidate, the label is ALSO
+    // wrapped in its own <a href> (opens the entity's view page in a new tab) --
+    // cy.contains(label).click() is ambiguous between the two and can hit the link
+    // instead of actually selecting the candidate. The button carries a stable
+    // title="link to" regardless of whether a view link is present.
+    cy.contains('li', 'Thurneysen, Eduard (1888-1974)').find('button[title="link to"]').click({ force: true });
     cy.wait(1000); // selecting a candidate triggers a save round-trip (annotations/occurrences)
 
     // The "Annotation Details" panel shows the linked entity's id inside an <input>
@@ -113,5 +125,44 @@ describe('Web annotation editor: reconciling an entity against our own endpoint'
       const values = [...$inputs].map((el) => el.value);
       expect(values, 'input values on the page').to.include('kbga-actors-403');
     });
+  });
+});
+
+// Regression coverage for the general field-mapping mechanism (see
+// tei-publisher-components' Registry.buildProperties/parseFieldsConfig, and
+// README_MANUAL_TESTING.md §B3 / the annotate_reconciliation_client project memory):
+// an admin can configure, via the `fields` attribute set in this file's own before()
+// hook above, which of a match's fields end up in which output attribute, instead of
+// only ever the id going to a single reference/key attribute. Uses a different demo
+// entity than the tests above ("Sailer, Hieronymus" / gnd-137224435, in
+// demo/CIDTC-3823-cortez.xml) specifically because it has a real, non-empty GND
+// identifier available via /extend, letting this test also exercise the
+// `extend:propertyId` field source end-to-end, not just id/label.
+describe('Web annotation editor: mapping a match\'s fields to output attributes', () => {
+  const annotateUrl = '/demo/CIDTC-3823-cortez.xml?template=annotate.html&odd=annotations&view=single';
+  const auth = { username: 'tei', password: 'simple' };
+
+  it('writes the escaped name, id, and an /extend-fetched property to three separate attributes', () => {
+    cy.visit(annotateUrl, { auth });
+    cy.wait(4000);
+    cy.get('.annotation.authority').contains('Ger').scrollIntoView().click({ force: true });
+    cy.wait(500);
+    cy.get('paper-icon-button[icon="icons:create"]').click({ force: true });
+    cy.wait(1000);
+
+    // The pencil-click auto-fills the search box with the clicked span's own visible
+    // text ("Gerónimo Sailer", given-name-first), which genuinely doesn't score a
+    // match against this entity's "Sailer, Hieronymus" (surname-first) label via
+    // either /suggest/entity or the full /reconcile endpoint -- confirmed directly
+    // against both endpoints, not a bug in this test. Type an explicit search term
+    // that does match instead of relying on the auto-filled one.
+    cy.get('pb-authority-lookup').shadow().find('input#query').clear().type('Sailer');
+    cy.wait(1500);
+    cy.contains('li', 'Sailer, Hieronymus').find('button[title="link to"]').click({ force: true });
+    cy.wait(1500);
+
+    cy.get('input[name="key"]').should('have.value', 'Sailer-Hieronymus');
+    cy.get('input[name="ref"]').should('have.value', 'gnd-137224435');
+    cy.get('input[name="gnd"]').should('have.value', 'https://d-nb.info/gnd/137224435');
   });
 });
