@@ -29,22 +29,25 @@
 // (reconcile.cy.js's Goethe/Dantiscus examples).
 describe('Web annotation editor: reconciling an entity against our own endpoint', () => {
   const docPath = 'sermons/27004.xml';
-  const annotateUrl = `/${docPath}?template=annotate.html&odd=annotations&view=single`;
+  const annotateUrl = `/${docPath}?template=annotate-tei.html&odd=annotations&view=single`;
   const auth = { username: 'tei', password: 'simple' };
 
   before(() => {
-    // Idempotently wire the "person" authority to our own ReconciliationService
-    // connector, and configure `fields` (see tei-publisher-components' Registry.
-    // buildProperties/parseFieldsConfig) so a selected match's escaped name, id, and
-    // (fetched via /extend) GND identifier land in three separate output attributes
-    // instead of the id alone going to the reference/key field -- this is a required
-    // one-time app customization for this demo, not optional tuning (see
-    // README_TEST_CONTAINER.md §2c/§4). Setting `fields` here does not break the
-    // existing id-only assertions below: they only check that SOME input holds the
-    // expected id, which the new @ref-mapped hidden field still satisfies.
+    // Idempotently confirm the "person" authority is wired to our own ReconciliationService
+    // connector (nested inside Custom, per the shipped annotate-tei.html - see the profile
+    // source's own authority-config template) with `fields` configured (see
+    // tei-publisher-components' Registry.buildProperties/parseFieldsConfig) so a selected
+    // match's escaped name, id, and (fetched via /extend) GND identifier land in three separate
+    // output attributes instead of the id alone going to the reference/key field. This is
+    // shipped by the profile itself now, not applied ad hoc here - this just guards against
+    // running against a stale/differently-configured app. Note: the *editable page*
+    // (templates/pages/annotate.html) has no pb-authority elements of its own - it's a base
+    // template extended by templates/pages/annotate-tei.html (requested via
+    // ?template=annotate-tei.html, not annotate.html - see annotateUrl below), which is where
+    // authority-config actually lives.
     const xq = `
       declare namespace html="http://www.w3.org/1999/xhtml";
-      let $doc := doc("/db/apps/tp-reconc/templates/pages/annotate.html")
+      let $doc := doc("/db/apps/tp-reconc/templates/pages/annotate-tei.html")
       let $person := $doc//*[local-name() = 'pb-authority'][@name = 'person']
       return
         if ($person/@fields = "key=label,ref=id,gnd=extend:gnd") then "already-wired"
@@ -139,7 +142,7 @@ describe('Web annotation editor: reconciling an entity against our own endpoint'
 // identifier available via /extend, letting this test also exercise the
 // `extend:propertyId` field source end-to-end, not just id/label.
 describe('Web annotation editor: mapping a match\'s fields to output attributes', () => {
-  const annotateUrl = '/demo/CIDTC-3823-cortez.xml?template=annotate.html&odd=annotations&view=single';
+  const annotateUrl = '/demo/CIDTC-3823-cortez.xml?template=annotate-tei.html&odd=annotations&view=single';
   const auth = { username: 'tei', password: 'simple' };
 
   it('writes the escaped name, id, and an /extend-fetched property to three separate attributes', () => {
@@ -176,10 +179,10 @@ describe('Web annotation editor: mapping a match\'s fields to output attributes'
 // data (unlike organization/work, which have none in this demo) - same mechanism though, so this
 // stands in for all three.
 describe('Web annotation editor: field-mapping and detail popups work for types other than person', () => {
-  const annotateUrl = '/demo/CIDTC-3823-cortez.xml?template=annotate.html&odd=annotations&view=single';
+  const annotateUrl = '/demo/CIDTC-3823-cortez.xml?template=annotate-tei.html&odd=annotations&view=single';
   const auth = { username: 'tei', password: 'simple' };
 
-  it('writes the escaped name and id to separate attributes for a "place" match', () => {
+  it('writes the escaped name, id, and an /extend-fetched GeoNames link to three separate attributes for a "place" match', () => {
     cy.visit(annotateUrl, { auth });
     cy.wait(4000);
     // "Castilla" (unlike "México", which is also a substring of a second, separately
@@ -193,10 +196,14 @@ describe('Web annotation editor: field-mapping and detail popups work for types 
     cy.get('pb-authority-lookup').shadow().find('input#query').clear().type('Madrid');
     cy.wait(1500);
     cy.contains('li', 'Madrid').find('button[title="link to"]').click({ force: true });
-    cy.wait(1500); // selecting a candidate triggers a save round-trip (annotations/occurrences)
+    // extend:link resolves via a real, live GeoNames.fetchExtend() call (geonameId 3117735 is a
+    // genuine GeoNames id, not just a local-register convention), so give it more time than the
+    // plain save round-trip alone would need.
+    cy.wait(3000);
 
     cy.get('input[name="key"]').should('have.value', 'Madrid');
     cy.get('input[name="ref"]').should('have.value', 'geo-3117735');
+    cy.get('input[name="link"]').should('have.value', 'https://www.geonames.org/3117735');
   });
 
   // Sets up the linked state directly via XQuery rather than depending on the search-and-select
@@ -252,24 +259,47 @@ describe('Web annotation editor: field-mapping and detail popups work for types 
 // tei-publisher-jinks profiles/annotate/config.json's features.annotate.configs.tei.keyMap,
 // wired onto <pb-view-annotate key-map="..."> in annotate.html) -- pb-view-annotate.js's
 // own getKey(type) already supported this per-type override, it just wasn't configured.
-// Self-contained (does not depend on another test's write): sermons/27003.xml already
-// carries a real, previously-linked persName (ref="kbga-actors-329" key="Rade-Martin-
-// 1857-1940", "Ruhe") from manual testing of the field-mapping feature -- exactly the
-// live document/entity the bug was originally reported against.
+// Originally reported and verified against a real, manually-created persName
+// (ref="kbga-actors-329" key="Rade-Martin-1857-1940", "Ruhe") -- lost to a subsequent
+// `jinks update --reinstall` (demo-data is reset to its pristine, un-annotated state by
+// that operation, as expected). Rewritten to set up the equivalent linked state directly
+// via XQuery against an existing, pristine persName ("Peter", kbga-actors-27 -- the same
+// entity/document combination the original bug report itself also mentioned as a working
+// old-style comparison case) so this test is self-contained rather than depending on
+// live, hand-created state that can't be guaranteed to survive a clean regeneration.
 describe('Web annotation editor: viewing an already-linked entity\'s detail popup', () => {
-  const annotateUrl = '/sermons/27003.xml?template=annotate.html&odd=annotations&view=single';
+  const annotateUrl = '/sermons/27003.xml?template=annotate-tei.html&odd=annotations&view=single';
   const auth = { username: 'tei', password: 'simple' };
+
+  before(() => {
+    const xq = `
+      declare namespace tei="http://www.tei-c.org/ns/1.0";
+      let $p := doc("/db/apps/tp-reconc/data/sermons/27003.xml")//tei:persName[@key = "kbga-actors-27"][1]
+      return (
+        if ($p/@ref) then () else update insert attribute ref { "kbga-actors-27" } into $p,
+        update value $p/@key with "Barth-Peter",
+        "done"
+      )
+    `;
+    cy.request({
+      method: 'POST',
+      url: 'http://localhost:8080/exist/rest/db',
+      auth,
+      headers: { 'Content-Type': 'application/xml' },
+      body: `<query xmlns="http://exist.sourceforge.net/NS/exist" wrap="no"><text><![CDATA[${xq}]]></text></query>`,
+    }).its('status').should('eq', 200);
+  });
 
   it('shows the entity\'s real preview, not "Entity not found"', () => {
     cy.visit(annotateUrl, { auth });
     cy.wait(4000);
-    cy.get('.annotation.authority').contains('Ruhe').scrollIntoView().click({ force: true });
+    cy.get('.annotation.authority').contains('Peter').scrollIntoView().click({ force: true });
     cy.wait(1000);
 
     cy.get('.info').should(($info) => {
       const text = $info.text();
       expect(text, 'detail popup content').not.to.include('not found');
-      expect(text, 'detail popup content').to.include('Rade');
+      expect(text, 'detail popup content').to.include('Barth');
     });
   });
 });
