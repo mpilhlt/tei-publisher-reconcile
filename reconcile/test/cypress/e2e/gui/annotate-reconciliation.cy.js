@@ -52,10 +52,12 @@ describe('Web annotation editor: reconciling an entity against our own endpoint'
       return
         if ($person/@fields = "key=label,ref=id,gnd=extend:gnd") then "already-wired"
         else (
-          update replace $person with
-            <pb-authority connector="ReconciliationService" name="person"
-              endpoint="/exist/apps/tp-reconc/api/reconcile" type="person" edit=""
-              fields="key=label,ref=id,gnd=extend:gnd"/>,
+          (: Update the @fields attribute only - $person is the outer connector="Custom"
+             element that wraps a nested GND connector plus a nested ReconciliationService
+             connector (see annotate-tei.html); replacing the whole element here (as an
+             earlier version of this guard did) would silently drop that nesting and
+             regress to a bare ReconciliationService-only connector. :)
+          update value $person/@fields with "key=label,ref=id,gnd=extend:gnd",
           "updated"
         )
     `;
@@ -99,7 +101,12 @@ describe('Web annotation editor: reconciling an entity against our own endpoint'
       expect(candidates[0].name).to.include('Thurneysen');
     });
 
-    cy.contains('Thurneysen, Eduard (1888-1974)').should('be.visible');
+    // The candidate list renders inside the popup's scrollable .info container (capped
+    // at max-height so a long entity preview doesn't blow up the page - see annotate.css)
+    // below whatever detail content the earlier click-to-view popup already rendered, so
+    // it can start out below the fold. scrollIntoView() first, same as every other
+    // candidate-list interaction in this file, rather than asserting visibility in place.
+    cy.contains('Thurneysen, Eduard (1888-1974)').scrollIntoView().should('be.visible');
   });
 
   it('selecting the returned candidate links the entity to that candidate\'s id', () => {
@@ -166,7 +173,11 @@ describe('Web annotation editor: mapping a match\'s fields to output attributes'
 
     cy.get('input[name="key"]').should('have.value', 'Sailer-Hieronymus');
     cy.get('input[name="ref"]').should('have.value', 'gnd-137224435');
-    cy.get('input[name="gnd"]').should('have.value', 'https://d-nb.info/gnd/137224435');
+    // "gnd" is populated via a live round-trip to lobid.org (GND.fetchExtend ->
+    // getRecord), not from data the candidate list already had - give it more room
+    // than the default 4s retry window before treating a slow lobid.org response as
+    // a real failure.
+    cy.get('input[name="gnd"]', { timeout: 12000 }).should('have.value', 'https://d-nb.info/gnd/137224435');
   });
 });
 
