@@ -308,15 +308,14 @@ describe('preview and view services', () => {
       })
   })
 
-  // Regression test for a bug reported 2026-07-24: the register-overview ODD
-  // transform's own link to the entity's registers page is relative
-  // (href="people/<id>"), which only ever resolves correctly if the preview HTML
-  // is rendered as its own document at that exact path. It isn't -- the
-  // annotate-editor client fetches this HTML and injects it into an existing
-  // page's DOM via innerHTML (tei-publisher-components' ReconciliationService.
-  // info()), so the relative link resolved against whatever page happened to
-  // have the preview open in it instead, e.g. producing ".../sermons/people/<id>"
-  // for a preview opened from within a sermon document.
+  // The register-overview ODD transform's own link to the entity's registers page
+  // is relative (href="people/<id>"), which only resolves correctly if the preview
+  // HTML is rendered as its own document at that exact path. It isn't: the
+  // annotate-editor client fetches this HTML and injects it into an existing page's
+  // DOM via innerHTML (tei-publisher-components' ReconciliationService.info()), so
+  // a relative link resolves against whatever page happens to have the preview
+  // open, e.g. ".../sermons/people/<id>" for a preview opened from a sermon
+  // document. reconc:absolutize-links rewrites every link before it goes out.
   it('the entity link in the preview is absolute, not resolved against whatever page embeds it', () => {
     cy.api({ url: '/api/reconcile/preview', qs: { id: 'kbga-actors-136' } })
       .then(({ body }) => {
@@ -564,16 +563,14 @@ describe('request-size caps (production hardening)', () => {
   })
 })
 
-// Regression coverage for a real OpenRefine 3.10.0 run (2026-07-23) against this
-// server that produced 5 matches / 88 errors on a ~93-row column — see the
-// `openrefine_batch_bug` project memory / README_MANUAL_TESTING.md "Known gaps".
-// Root cause, confirmed live via curl before this fix: a single malformed entry
-// anywhere in a batch (a blank cell serialized as JSON null, or any non-object
-// value) either crashed the *entire* HTTP request with a 500, or — for the
-// 1.0-draft array shape specifically — silently vanished during array unboxing,
-// shortening "results" and shifting every later query's answer out of position.
-// That exact mismatch is what OpenRefine's own batch-shape check reports as
-// "No. of recon objects was less than no. of jobs".
+// Regression coverage for a real OpenRefine run against this server that produced
+// 5 matches / 88 errors on a ~93-row column (see README_MANUAL_TESTING.md). Root
+// cause: a single malformed entry anywhere in a batch (a blank cell serialized as
+// JSON null, or any non-object value) either crashed the *entire* HTTP request
+// with a 500, or — for the 1.0-draft array shape specifically — silently vanished
+// during array unboxing, shortening "results" and shifting every later query's
+// answer out of position. That exact mismatch is what OpenRefine's own
+// batch-shape check reports as "No. of recon objects was less than no. of jobs".
 describe('malformed batch entries do not crash or misalign the batch (OpenRefine hardening)', () => {
   let resultSchema
 

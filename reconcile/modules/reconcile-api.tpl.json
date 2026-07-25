@@ -41,7 +41,7 @@
                     {
                         "name": "version",
                         "in": "query",
-                        "description": "Force the manifest shape for a specific protocol version ('0.2' or '1.0-draft'). Defaults to a manifest compatible with both.",
+                        "description": "Force the manifest shape for a specific protocol version ('0.2' or '1.0-draft'). A single manifest cannot validate against both versions' JSON Schemas at once, so this defaults to a 1.0-draft-only manifest; pass '0.2' for a 0.2-only one.",
                         "schema": {
                             "type": "string"
                         }

@@ -3,15 +3,13 @@
 //
 // Scope: covers the "click an already-tagged entity -> edit -> the reconciliation
 // search fires against our endpoint -> a real candidate is shown -> selecting it links
-// the entity" click path. Confirmed manually 2026-07-24 (see the
-// annotate_reconciliation_client project memory / README_MANUAL_TESTING.md §B3) that
-// this exact flow, wired up correctly, previously queried https://api.metagrid.ch/
-// instead of localhost -- root cause: tei-publisher-components' createConnectors()
-// silently falls back to the unrelated Metagrid connector for ANY unrecognized
-// `connector` attribute value (a typo like connector="Reconciliation" instead of the
-// exact "ReconciliationService" would trigger this, with no error). These tests are a
-// regression guard against exactly that: they assert the actual request URL, not just
-// "some request happened".
+// the entity" click path. This flow, wired up correctly, once queried
+// https://api.metagrid.ch/ instead of localhost -- root cause: tei-publisher-components'
+// createConnectors() silently falls back to the unrelated Metagrid connector for ANY
+// unrecognized `connector` attribute value (a typo like connector="Reconciliation"
+// instead of the exact "ReconciliationService" would trigger this, with no error).
+// These tests are a regression guard against exactly that: they assert the actual
+// request URL, not just "some request happened".
 //
 // NOT covered here: tagging a brand-new entity by selecting raw, previously-untagged
 // text in the document. That flow drives the browser's native Selection API inside a
@@ -140,9 +138,9 @@ describe('Web annotation editor: reconciling an entity against our own endpoint'
 
 // Regression coverage for the general field-mapping mechanism (see
 // tei-publisher-components' Registry.buildProperties/parseFieldsConfig, and
-// README_MANUAL_TESTING.md §B3 / the annotate_reconciliation_client project memory):
-// an admin can configure, via the `fields` attribute set in this file's own before()
-// hook above, which of a match's fields end up in which output attribute, instead of
+// README_MANUAL_TESTING.md): an admin can configure, via the `fields` attribute set
+// on the person authority in annotate-tei.html (see this file's own before() hook
+// above), which of a match's fields end up in which output attribute, instead of
 // only ever the id going to a single reference/key attribute. Uses a different demo
 // entity than the tests above ("Sailer, Hieronymus" / gnd-137224435, in
 // demo/CIDTC-3823-cortez.xml) specifically because it has a real, non-empty GND
@@ -218,16 +216,12 @@ describe('Web annotation editor: field-mapping and detail popups work for types 
   });
 
   // Sets up the linked state directly via XQuery rather than depending on the search-and-select
-  // test above having actually persisted its selection to the document -- confirmed separately
-  // (see the annotate_keymap_and_css_selector_bugs project memory) that Cypress's forced-click
+  // test above having actually persisted its selection to the document -- Cypress's forced-click
   // selection flow reliably updates the *form*, but does not reliably persist to the saved
   // document for a re-selection of an already-annotated span, for any type including "person"
-  // (checked live: sermons/27004.xml's own Thurneysen persName, selected by the person suite's
-  // own passing test earlier in this same file, still has no @ref months into this project). A
-  // real, unforced user interaction does persist correctly (confirmed via a real, manually
-  // created entity in the "place" detail-popup fix itself), so this is a Cypress force-click
-  // limitation, not a product bug -- and orthogonal to what this specific test needs to check,
-  // which is only whether the detail popup correctly reads @ref once it's actually set.
+  // (a real, unforced user interaction does persist correctly, so this looks like a Cypress
+  // force-click limitation, not a product bug). That's orthogonal to what this specific test
+  // needs to check, which is only whether the detail popup correctly reads @ref once it's set.
   it('the detail popup for a "place" linked via @ref shows the real preview, not "Entity not found"', () => {
     const xq = `
       declare namespace tei="http://www.tei-c.org/ns/1.0";
@@ -259,25 +253,23 @@ describe('Web annotation editor: field-mapping and detail popups work for types 
   });
 });
 
-// Regression coverage for a bug reported 2026-07-24: with fields="key=label,ref=id,..."
-// in effect (see the describe block above), clicking on an already-linked entity to view
-// its read-only detail popup showed "Entity not found" instead of the entity's actual
-// preview/properties. Root cause: pb-view-annotate's own detail-lookup reads the id from
-// whichever annotation property the "key"/"key-map" attribute names (default "key", i.e.
-// persName/@key) -- correct under the OLD single-attribute convention where @key held the
-// id, but @key now holds the *label* under the new field-mapping convention, with the id
-// in @ref instead. Fixed via a "person": "ref" entry in the app's key-map (see
-// tei-publisher-jinks profiles/annotate/config.json's features.annotate.configs.tei.keyMap,
-// wired onto <pb-view-annotate key-map="..."> in annotate.html) -- pb-view-annotate.js's
-// own getKey(type) already supported this per-type override, it just wasn't configured.
-// Originally reported and verified against a real, manually-created persName
-// (ref="kbga-actors-329" key="Rade-Martin-1857-1940", "Ruhe") -- lost to a subsequent
-// `jinks update --reinstall` (demo-data is reset to its pristine, un-annotated state by
-// that operation, as expected). Rewritten to set up the equivalent linked state directly
-// via XQuery against an existing, pristine persName ("Peter", kbga-actors-27 -- the same
-// entity/document combination the original bug report itself also mentioned as a working
-// old-style comparison case) so this test is self-contained rather than depending on
-// live, hand-created state that can't be guaranteed to survive a clean regeneration.
+// Regression coverage: with fields="key=label,ref=id,..." in effect (see the describe
+// block above), clicking on an already-linked entity to view its read-only detail popup
+// showed "Entity not found" instead of the entity's actual preview/properties. Root
+// cause: pb-view-annotate's own detail-lookup reads the id from whichever annotation
+// property the "key"/"key-map" attribute names (default "key", i.e. persName/@key) --
+// correct under the OLD single-attribute convention where @key held the id, but @key now
+// holds the *label* under the new field-mapping convention, with the id in @ref instead.
+// Fixed via a "person": "ref" entry in the app's key-map (see tei-publisher-jinks
+// profiles/annotate/config.json's features.annotate.configs.tei.keyMap, wired onto
+// <pb-view-annotate key-map="..."> in annotate.html) -- pb-view-annotate.js's own
+// getKey(type) already supported this per-type override, it just wasn't configured.
+// (A related, deeper gap -- entities that predate any keyMap/fields config and only ever
+// had @key, never @ref -- is covered separately by pb-view-annotate's getId() fallback,
+// exercised by the "Thurneysen" tests in the first describe block above.) Sets up the
+// linked state directly via XQuery against an existing, pristine persName ("Peter",
+// kbga-actors-27) so this test is self-contained rather than depending on hand-created
+// state that doesn't survive a clean app regeneration.
 describe('Web annotation editor: viewing an already-linked entity\'s detail popup', () => {
   const annotateUrl = '/sermons/27003.xml?template=annotate-tei.html&odd=annotations&view=single';
   const auth = { username: 'tei', password: 'simple' };

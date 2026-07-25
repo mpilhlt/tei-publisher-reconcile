@@ -332,10 +332,10 @@ declare %private function reconc:manifest-response($request as map(*)) {
                 (: Every sub-service URL below carries "?version=0.2" explicitly, even
                  : though none of these particular endpoints currently behave any
                  : differently with or without it (their response schemas are identical
-                 : supersets between 0.2 and 1.0-draft — see reconcile_manifest_versioning
-                 : project memory for how manifest.json/reconciliation-result-batch.json
-                 : etc. compare). Since this profile serves both protocol versions from the
-                 : very same routes, distinguished only by this query parameter, a strict
+                 : supersets between 0.2 and 1.0-draft — compare the schemas under
+                 : reconc-specs/{0.2,1.0-draft}/schemas). Since this profile serves both
+                 : protocol versions from the very same routes, distinguished only by this
+                 : query parameter, a strict
                  : 0.2 client that resolves every URL from the 0.2 manifest it just fetched
                  : should consistently stay in "0.2 mode" rather than silently falling back
                  : to the (different) 1.0-draft default the bare URL would otherwise imply —
@@ -655,11 +655,11 @@ declare %private function reconc:is-relative-url($value as xs:string) as xs:bool
  : a full document would. A relative link like the "registers" profile's own
  : register-overview transform emits (e.g. href="people/kbga-actors-27", correct only
  : when rendered as part of a page already served AT that same path) then resolves
- : against whatever page happens to have the preview injected into it instead — this is
- : exactly the bug reported 2026-07-24: a preview shown inside a "/sermons/27004.xml"
- : annotation page produced a link to ".../sermons/people/kbga-actors-27" instead of
- : ".../people/kbga-actors-27". Rewriting the markup itself, rather than relying on
- : <base>, is correct regardless of how a client chooses to embed the result. :)
+ : against whatever page happens to have the preview injected into it instead — e.g. a
+ : preview shown inside a "/sermons/27004.xml" annotation page produced a link to
+ : ".../sermons/people/kbga-actors-27" instead of ".../people/kbga-actors-27". Rewriting
+ : the markup itself, rather than relying on <base>, is correct regardless of how a
+ : client chooses to embed the result. :)
 declare %private function reconc:absolutize-links($nodes as node()*, $base as xs:string) as node()* {
     for $n in $nodes
     return
@@ -890,7 +890,6 @@ declare function reconc:extend-propose($request as map(*)) {
     let $type := $request?parameters?type
     let $limit := ($request?parameters?limit, 20)[1]
     let $props := subsequence(reconc:properties-for-type($type), 1, max(($limit, 0)))
-    let $log := util:log("warn", "reconc:extend-propose called with type=" || serialize($type) || " limit=" || serialize($limit) || " -> " || count($props) || " properties; all-params=" || serialize($request?parameters))
     return
         map:merge((
             map {
