@@ -122,8 +122,8 @@ authoritative reference if this drifts again.)
 
 **2c. Optional — testing the annotation editor UI in a browser.** The config above is enough for
 curl/Cypress/the testbench/OpenRefine (everything in section 3 below and `README_MANUAL_TESTING.md`
-sections A/C). If you also want to click through the **annotation editor** (see
-`README_MANUAL_TESTING.md` §B3 for the full click path and known open issues), use this extended
+sections A/B/D). If you also want to click through the **annotation editor** (see
+`README_MANUAL_TESTING.md` §C for the click path), use this extended
 config instead — it adds `upload`, `jinntap`, `annotate`, `theme-base10`, and switches the theme
 palette to `neutral` (the default theme renders the annotate UI unusably):
 ```json
@@ -184,8 +184,9 @@ curl -s http://localhost:8080/exist/apps/tp-reconc/api/reconcile | jq .
 That's the exact command `README_MANUAL_TESTING.md` section A starts from.
 
 **Recreating just `tp-reconc` cleanly, without a full container/volume reset.** Useful for checking
-whether a problem is real or session-specific stale state (this exact recipe caught a false alarm on
-2026-07-24 — see `README_MANUAL_TESTING.md` §B3). A plain `podman`/collection delete is **not**
+whether a problem is real or session-specific stale state (this exact recipe once caught a false
+alarm in the annotate editor's setup — see `README_MANUAL_TESTING.md` §C). A plain `podman`/collection
+delete is **not**
 enough — the Jinks server also tracks apps as installed EXPath packages, and `jinks create` will
 fail with `Collection /db/apps/tp-reconc not found` if you only delete the collection while the
 package registration still exists. Properly unregister first:
@@ -349,7 +350,7 @@ the same way (defaults: `http://localhost:8080/exist/apps/jinks` / `tei` / `simp
     | curl -sS -u tei:simple -X PUT -H "Content-Type: application/xquery" --data-binary @- \
         "http://localhost:8080/exist/rest/db/apps/tp-reconc/modules/annotations/annotation-config.xqm"
   ```
-  then recompile ODDs again (`POST /api/odd` as above). See `README_MANUAL_TESTING.md` §B3 and the
+  then recompile ODDs again (`POST /api/odd` as above). See `README_MANUAL_TESTING.md` §C and the
   `annotate_reconciliation_client`/`tei_publisher_lib_data_tei_fix` project memories for the full
   investigation, including why this isn't a `tei-publisher-jinks` "delegation mechanism" bug (it
   isn't — the Jinks server's own bundled `annotate` profile is a plain, non-templated, already-working
