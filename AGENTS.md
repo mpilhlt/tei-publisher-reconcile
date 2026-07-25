@@ -173,6 +173,75 @@ the running code is the new code before debugging logic.
 
 ---
 
+## General Jinks / TEI Publisher v10 operational lessons (reusable beyond this project)
+
+Learned while building this profile and debugging the pre-existing `annotate` profile — none of
+this is reconcile-specific; keep it in mind for any future work on a Jinks-generated TEI Publisher
+app, whichever profile.
+
+- **Deploy edited profile files to *two* places, not one: the Jinks-registered profile
+  (`/db/apps/jinks/profiles/<name>/...`) *and* the live app (`/db/apps/<abbrev>/...`).** A live-app-
+  only patch (quick to do while iterating) silently vanishes on the next `jinks update`/`create` —
+  it never touches the Jinks-registered copy that regeneration actually reads from. This bit twice
+  in this project (once for the whole `annotate` profile, once for a single dispatcher file) before
+  becoming a standing habit.
+- **`.tpl.*` files need real template expansion before they're valid `.xql`/`.json`/etc.** —
+  `[% for/let/if %]` control markers and `[[ expression ]]` interpolations. Prefer letting
+  `jinks update`/`jinks create` do this (it's the real template engine); if you must hand-expand one
+  to deploy without a full regeneration cycle, do it very literally (map each `[[ ]]` occurrence to
+  its exact resolved value, delete the `[% %]` control lines entirely) and then verify with a real
+  `jinks update --reinstall` afterward that your hand-expansion matches the engine's own output.
+- **Fetching a *deployed* module's source to inspect or patch it needs two gotchas handled
+  together:**
+  1. A plain REST `GET` on a stored `.xql`/`.xqm` resource *executes* it rather than returning
+     source (you'll get an `<exception>` envelope if it can't compile standalone, which silently
+     looks like "empty/not found" if you're just grepping the response). Use
+     `util:binary-doc(path) => util:binary-to-string()` via an ad-hoc query instead.
+  2. If that returned string itself contains markup (`<`, `>`, `&` — e.g. inline TEI element
+     constructors in the source), eXist's REST XQuery service XML-entity-escapes it in the
+     response. Writing that escaped text back out via a raw PUT corrupts the file (and can take
+     down the *entire app's routing* if the corrupted module is imported eagerly by the composed
+     router — roaster fails to compile `modules/lib/api.xql` at all, not just that one route).
+     Always add `| base64` to the ad-hoc query's ultimate output and decode locally before
+     re-deploying anything fetched this way.
+- **`jinks update --all`'s interactive conflict-resolution UI cannot be reliably scripted** — piped
+  stdin causes an `ExitPromptError` on the second (checkbox-based) prompt. `jinks update <app>
+  --reinstall` is the deterministic, non-interactive alternative — but it resets *every*
+  profile-managed file to the profile's current defaults, including demo/data documents (hand-created
+  test annotations, etc. get wiped). Useful precisely *because* of that: a clean `--reinstall` is the
+  most reliable way to prove a fix doesn't depend on leftover, hand-patched DB state — just expect to
+  re-seed any manually-created test data afterward (or set it up via an XQuery `before()` hook in
+  tests instead of relying on it persisting).
+- **The base Docker image can bundle profile content that's stale relative to (or simply different
+  from) what's in the `tei-publisher-jinks` git history.** Don't assume "what's actually deployed in
+  a fresh container" matches "the latest source in the jinks repo" — compare explicitly
+  (`git log --all --follow -- <path>`, `git show <commit> -- <path>`) before concluding a bug is
+  either present or absent upstream. Tracing this rarely needs a *new* repo clone — check what's
+  already available locally first (see References below); a second, unrelated repo
+  (`tei-publisher-app`, an older/parallel lineage) turned out *not* to be the source of the bundled
+  module in one investigation, while `tei-publisher-jinks`'s own `git log` had the whole answer.
+- **A generated-app checkout does not automatically mirror every file that ends up deployed.**
+  Profile-shipped test files, `.tpl.json`-generated output (e.g. the aggregated `modules/lib/
+  api.json`), etc. can be listed in `.jinks.json`'s manifest yet simply absent from a checkout's
+  working directory. Before trusting "some tests fail, others don't" as a complete picture, verify
+  the checkout actually has the file in question — `find` it, or `curl` the file's hash-tracked path
+  directly from the live app and compare.
+- **A profile's own shipped Cypress tests are not guaranteed to currently pass** — a shared helper
+  command's signature can drift (e.g. `cy.uploadXml`) without every caller across every profile being
+  updated, and the failure mode is often a cryptic error inside a `before()`/`beforeEach()` hook that
+  silently skips the *entire* `describe` block, not an obvious per-test failure. Don't assume a
+  profile's existing test file represents current, verified behavior just because it exists and looks
+  thorough — run it once for real before relying on it as a regression baseline.
+- **For this project's annotate editor specifically: prefer Cypress over ad hoc Playwright scripts**
+  when you need a real interaction/screenshot of the click-to-view popup or pencil-button-driven
+  search flow. Plain Playwright automation of that exact sequence was repeatedly flaky here (timing/
+  scroll-position sensitive); Cypress's built-in retry-and-visibility semantics
+  (`.scrollIntoView().click({ force: true })`, generous `cy.wait()`s) reliably work for the same
+  interaction. A disposable, uncommitted `*.cy.js` spec with `cy.screenshot()` is a good way to get a
+  real, working screenshot fast rather than fighting Playwright's timing here.
+
+---
+
 ## Host / environment notes
 
 Host is Linux (WSL/Ubuntu or native Arch) using **podman**, not docker.
@@ -202,9 +271,18 @@ Host is Linux (WSL/Ubuntu or native Arch) using **podman**, not docker.
 
 The relevant repositories have been forked and cloned locally as subfolders to the working directory, a `feature/reconcile` branch has been created and checked out.
 
-- Jinks: `./tei-publisher-jinks` (Upstream is https://github.com/eeditiones/jinks)
+- Jinks: `./tei-publisher-jinks` (Upstream is https://github.com/eeditiones/jinks) — the profile
+  generator; source of truth for anything a Jinks-generated app is composed from.
 - jinks-cli: `./tei-publisher-jinks-cli` (Upstream is https://www.npmjs.com/package/@teipublisher/jinks-cli)
 - roaster: `./tei-publisher-roaster` (Upstream is https://github.com/eeditiones/roaster)
+- tei-publisher-components: `./tei-publisher-components` (Upstream is
+  https://github.com/eeditiones/tei-publisher-components) — the web-component library
+  (`pb-*`, `pb-authority-lookup`'s connectors, etc.) generated apps load client-side.
+- tei-publisher-app: `./tei-publisher-app` (Upstream is https://github.com/eeditiones/tei-publisher-app)
+  — an older/parallel, more monolithic TEI Publisher app lineage, **not** the source of a
+  Jinks-generated app's bundled profile defaults (confirmed by direct comparison: its own
+  `annotation-config.xqm` doesn't even match what ships in the `existdb/teipublisher:10.0.0` image).
+  Useful as a cross-reference, not authoritative for Jinks-generated-app behavior.
 - docker image: https://hub.docker.com/r/existdb/teipublisher
 - Reconciliation spec + schemas: `./reconc-specs` (Upstream is https://github.com/reconciliation-api/specs)
   - 1.0 draft: `./reconc-specs/1.0-draft` (Upstream is https://reconciliation-api.github.io/specs/1.0-draft/)
