@@ -1,0 +1,9 @@
+{
+    "theme": { "colors": { "palette": "neutral" } },
+    "overwrite": "default",
+    "label": "TEI Publisher Reconciliation Demo",
+    "id": "https://e-editiones.org/apps/tp-reconc",
+    "extends": ["base10", "demo-data", "theme-base10", "registers", "reconcile", "upload", "jinntap", "annotate"],
+    "pkg": { "abbrev": "tp-reconc" },
+    "description": "Demo app for the OpenRefine Reconciliation Service profile"
+}
