@@ -62,10 +62,14 @@ FROM docker.io/existdb/teipublisher:10.0.0
 # correctly against this base image's glibc (docker/README.md documents the test).
 COPY --from=nodesrc /usr/local /usr/local
 
-# Dropped into eXist's own autodeploy/ convention: any .xar found there is installed at
-# database startup, before Jetty starts accepting requests - no explicit install step needed
-# in entrypoint.js. Fixes the XQDY0025 crash in the annotate view (see above).
-COPY --from=lib-builder /src/build/tei-publisher-lib.xar /exist/autodeploy/tei-publisher-lib-6.1.1.xar
+# NOT dropped into /exist/autodeploy/: confirmed empirically that this base image already
+# bundles tei-publisher-lib-6.0.2 as an already-installed package, and eXist's autodeploy scan
+# dedupes by package ID alone ("Application package ... already installed. Skipping.") - it does
+# NOT compare versions, so our 6.1.1 silently loses and the XQDY0025 bug stays live. Instead,
+# entrypoint.js explicitly PUTs this file to /db and calls repo:install-and-deploy-from-db,
+# which *does* perform a real version-aware upgrade install (the exact, proven-working procedure
+# documented in README_TEST_CONTAINER.md).
+COPY --from=lib-builder /src/build/tei-publisher-lib.xar /opt/app/tei-publisher-lib-6.1.1.xar
 
 COPY --from=jinks-cli-builder /opt/jinks-cli /opt/jinks-cli
 COPY --from=components-builder /src/dist /opt/pb-components/dist

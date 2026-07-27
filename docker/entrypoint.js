@@ -108,6 +108,35 @@ async function runXQuery(query) {
   return text;
 }
 
+// The base image already ships tei-publisher-lib-6.0.2 as an installed package. eXist's
+// /exist/autodeploy/ scan dedupes purely by package ID ("Application package ... already
+// installed. Skipping.") - it does NOT compare versions, so simply dropping our patched 6.1.1
+// xar into autodeploy silently loses to the stock 6.0.2 and the XQDY0025 bug
+// (tei_publisher_lib_data_tei_fix project memory) stays live. repo:install-and-deploy-from-db
+// *does* perform a real version-aware upgrade - this is the exact, proven-working procedure
+// documented in README_TEST_CONTAINER.md, just automated here instead of run by hand.
+async function installTeiPublisherLib() {
+  const xarPath = '/opt/app/tei-publisher-lib-6.1.1.xar';
+  const xar = await readFile(xarPath);
+  const dbPath = '/db/tei-publisher-lib-6.1.1.xar';
+  const put = await fetch(`${BASE}/exist/rest${dbPath}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      Authorization: basicAuthHeader(ADMIN_USER, ADMIN_PASS),
+    },
+    body: xar,
+  });
+  if (![200, 201].includes(put.status)) {
+    throw new Error(`Failed to upload tei-publisher-lib.xar: HTTP ${put.status}`);
+  }
+  await runXQuery(`
+    import module namespace repo="http://exist-db.org/xquery/repo";
+    repo:install-and-deploy-from-db("${dbPath}")
+  `);
+  log('installed tei-publisher-lib 6.1.1 (upgrading the stock 6.0.2)');
+}
+
 const CONTENT_TYPES = {
   '.json': 'application/json',
   '.xql': 'application/xquery',
@@ -323,33 +352,32 @@ async function main() {
     // features.forms.enabled flag that otherwise silently disables fore.js/fore.css loading.
     await deployProfileTree('/opt/profiles/forms', 'forms');
     await createApp();
-    // Safety net for the patched tei-publisher-lib .xar (see ../Dockerfile's autodeploy
-    // COPY): autodeploy installs it before Jetty accepts requests, so a fresh app's ODDs
-    // should already compile against the fixed library - but explicitly recompiling here
-    // matches the exact, proven-working procedure (see README_TEST_CONTAINER.md) rather
-    // than relying on that timing assumption alone.
-    //
-    // /api/odd is gated by x-constraints (roaster's auth.xql: authenticated-but-not-yet-
-    // authorized reads as a plain 401 "Access denied", same shape as a bad password) checked
-    // against the app-user's group membership - immediately after `jinks create` returns,
-    // that membership hasn't always propagated yet (confirmed empirically: the identical
-    // request, retried a few seconds later by hand, succeeds). Retry instead of trusting the
-    // first attempt.
-    let recompileStatus;
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      const recompile = await fetch(`${BASE}/exist/apps/${APP_ABBREV}/api/odd`, {
-        method: 'POST',
-        headers: { Authorization: basicAuthHeader(APP_USER, APP_PASS) },
-      });
-      recompileStatus = recompile.status;
-      if (recompileStatus === 200) break;
-      log(`recompile ODDs attempt ${attempt}: HTTP ${recompileStatus} - retrying...`);
-      await new Promise(resolve => setTimeout(resolve, attempt * 1000));
-    }
-    log(`recompiled ODDs: HTTP ${recompileStatus}`);
   } else {
     log(`"${APP_ABBREV}" already exists - skipping first-boot setup.`);
   }
+
+  // Run on every boot, not just first-boot: on a persisted volume, an app created by an older
+  // build of this image could still be bound to the stock (buggy) tei-publisher-lib, and a
+  // package upgrade alone does not retroactively fix already-compiled transform/*.xql files -
+  // recompiling ODDs every boot is what actually makes an upgrade take effect.
+  await installTeiPublisherLib();
+  // /api/odd is gated by x-constraints (roaster's auth.xql: authenticated-but-not-yet-
+  // authorized reads as a plain 401 "Access denied", same shape as a bad password) checked
+  // against the app-user's group membership - immediately after `jinks create` returns, that
+  // membership hasn't always propagated yet (confirmed empirically: the identical request,
+  // retried a few seconds later by hand, succeeds). Retry instead of trusting the first attempt.
+  let recompileStatus;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const recompile = await fetch(`${BASE}/exist/apps/${APP_ABBREV}/api/odd`, {
+      method: 'POST',
+      headers: { Authorization: basicAuthHeader(APP_USER, APP_PASS) },
+    });
+    recompileStatus = recompile.status;
+    if (recompileStatus === 200) break;
+    log(`recompile ODDs attempt ${attempt}: HTTP ${recompileStatus} - retrying...`);
+    await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+  }
+  log(`recompiled ODDs: HTTP ${recompileStatus}`);
 
   await deployComponents();
   await applyComponentsConfig();

@@ -136,13 +136,37 @@ base `existdb/teipublisher` image kept) — surfaced four more real bugs, all no
 - **`err:XQDY0025: element has more than one attribute 'data-tei'`** crashing the annotate view.
   This project's `tei-publisher-lib` checkout already carries the fix (bumped to `6.1.1`, see the
   `tei_publisher_lib_data_tei_fix` project memory) but the image never baked it in — only the dev
-  container had it manually installed, which a full cache wipe erases. Fixed by adding a
-  `lib-builder` Dockerfile stage that runs `ant xar` against the patched checkout and drops the
-  result into `/exist/autodeploy/`, eXist's own "install this at startup" convention. The
-  first-boot ODD recompile now also retries a few times: `/api/odd` is gated by `x-constraints`
-  (a group-membership check, not a bad-password check — roaster's `auth.xql` returns the same
-  bare "Access denied" 401 either way), and that membership doesn't always propagate before
-  `jinks create` returns; the identical request retried a few seconds later succeeds.
+  container had it manually installed, which a full cache wipe erases. First attempt: a
+  `lib-builder` Dockerfile stage building the `.xar` and dropping it into `/exist/autodeploy/`,
+  eXist's own "install this at startup" convention — **this alone turned out not to be enough**:
+  the base image already ships `tei-publisher-lib-6.0.2` as an installed package, and
+  `/exist/autodeploy/`'s startup scan dedupes purely by package ID ("Application package ...
+  already installed. Skipping.") with no version comparison, so the 6.1.1 xar silently lost to
+  the stock 6.0.2 every time and the bug stayed live even with the xar correctly baked into the
+  image. Fixed by having `entrypoint.js` explicitly PUT the xar to `/db` and call
+  `repo:install-and-deploy-from-db` — the same, actually version-aware upgrade procedure already
+  documented (and proven) by hand in `README_TEST_CONTAINER.md` — on every boot, not relying on
+  autodeploy at all. The ODD recompile (also moved to run every boot, not just first boot) retries
+  a few times: `/api/odd` is gated by `x-constraints` (a group-membership check, not a bad-password
+  check — roaster's `auth.xql` returns the same bare "Access denied" 401 either way), and that
+  membership doesn't always propagate before `jinks create` returns; the identical request retried
+  a few seconds later succeeds.
+- **Empty annotation-toolbar buttons** (no person/place/save/undo/... icons, just blank pills) —
+  a separate bug from the XQDY0025 crash, only visible once that crash was fixed enough to reach
+  the toolbar at all. The buttons' `<svg><use href="#person-fill">` markup needs the icon
+  sprite's `<symbol>` defs present somewhere in the same document. `annotate`'s own
+  `templates/pages/annotate.html` frontmatter already declared `theme.icons:
+  ["annotate-icons.svg"]`, the convention `base10`'s `templates/layouts/base.html` is meant to
+  consume via `[% for $icons in $context?theme?icons?* %][% include ... %][% endfor %]` (the
+  same pattern the sibling `metadata-editor` profile uses successfully) — but this app's
+  actually-deployed `base10` has no such loop at all (confirmed by fetching the live
+  `templates/layouts/base.html`: it `[% include %]`s `menu.html`/`toolbar.html`/
+  `footer-mobile.html`, nothing icon-related), so declaring `theme.icons` anywhere had no effect.
+  Fixed pragmatically, matching this project's established pattern for base10 drift: `annotate`'s
+  own `content-top` template now directly `[% include "resources/css/annotate-icons.svg" %]`s
+  the sprite itself, independent of whether the app's base10 supports the `theme.icons`
+  mechanism. (The `config.json` `theme.icons` declaration was left in place too — harmless, and
+  correct for any base10 that *does* implement the loop.)
 - **Raw Fore markup visibly leaking in the annotation editor's side panel** (JS function bodies,
   `falsefalsefalsetrue`-style instance data, a permanently-visible "Cannot save to local register.
   Please log in!" message even while logged in). Root cause, found via a Playwright check
@@ -158,10 +182,17 @@ base `existdb/teipublisher` image kept) — surfaced four more real bugs, all no
   `annotate`/`reconcile`), *and* `docker/app-config.json`'s `extends` list now lists `forms`
   directly, not just via `annotate`.
 
-All four were re-verified together against a fully fresh `podman build` + `podman run` (no reused
+All were re-verified together against a fully fresh `podman build` + `podman run` (no reused
 layers beyond the base image, no persisted volume): i18n resources serve real translations, the
-annotate view has no `XQDY0025`, the ODD recompile succeeds, and a Playwright check confirms
-`fx-fore` upgrades correctly with none of the raw-markup strings visible in the rendered page.
+annotate view has no `XQDY0025`, the ODD recompile succeeds, a Playwright check confirms `fx-fore`
+upgrades correctly with none of the raw-markup strings visible in the rendered page, and a
+screenshot of the annotation toolbar shows real icons instead of blank buttons.
+
+One more log line is expected and **not** a bug: `pb-login`'s own `_checkLogin` component
+(`tei-publisher-components/src/pb-login.js`) issues an unauthenticated status-check POST to
+`/api/login/` on every page load to find out whether a session already exists; a `401 Wrong user
+or password` from that specific probe is normal even while actually logged in via a real session
+cookie elsewhere - it isn't evidence of a login problem.
 
 ## Known limitations / next steps
 
