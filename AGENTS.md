@@ -239,6 +239,24 @@ app, whichever profile.
   (`.scrollIntoView().click({ force: true })`, generous `cy.wait()`s) reliably work for the same
   interaction. A disposable, uncommitted `*.cy.js` spec with `cy.screenshot()` is a good way to get a
   real, working screenshot fast rather than fighting Playwright's timing here.
+- **A profile's `config.json` `features` block only gets merged into `context.json` for profiles
+  the *app* directly `extends` — not for profiles reached only transitively, through another
+  profile's own `depends`.** Found via the `forms` profile (depended on by `annotate`, but never
+  listed in the demo app's own `extends`): its `features.forms.*` defaults silently never reached
+  the running app at all, even after fixing an actual bug in that block, until `forms` was added to
+  the app's `extends` list directly (redundant with `annotate`'s `depends`, but required for the
+  merge). If a dependency's documented `config.json` defaults don't seem to be taking effect, check
+  whether it's only a transitive dependency before assuming the value itself is wrong.
+- **When a Web Component-driven page looks structurally fine in `curl`/raw-HTML but behaves wrong
+  in a browser (custom elements not upgrading, raw template markup visibly rendered as text), check
+  *which* `<script>`/`<link>` tags are actually present, not just whether the page as a whole
+  returns 200.** A template that conditionally emits a component's loader script (gated on some
+  `$features?...` flag) can silently omit it while everything else on the page renders correctly —
+  `curl` alone won't reveal the missing behavior since the *un-upgraded* custom element's raw inner
+  markup is still valid, visible HTML. A quick Playwright check —
+  `customElements.get('the-tag-name')` plus scanning `page.innerText('body')` for text that should
+  only ever be conditionally visible — pinpoints this in seconds; grepping rendered HTML for the
+  expected `<script src>` is the non-browser equivalent and almost as fast.
 
 ---
 

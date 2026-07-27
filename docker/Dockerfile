@@ -14,7 +14,7 @@
 # Build (from the repo root):
 #   podman build -f docker/Dockerfile -t tp-reconc-demo .
 # Run:
-#   podman run -d --name tp-reconc-demo -p 8080:8080 -p 8000:8000 tp-reconc-demo
+#   podman run -d --name tp-reconc-demo -p 8080:8080 tp-reconc-demo
 
 # --- Stage: source of the Node.js runtime we copy into the final (shell-less) image -------
 FROM node:20-slim AS nodesrc
@@ -37,6 +37,18 @@ FROM node:20-slim AS jinks-cli-builder
 # Pinned to the version confirmed working throughout this project's development.
 RUN npm install -g @teipublisher/jinks-cli@2.4.0 --prefix /opt/jinks-cli
 
+# --- Stage: build the patched tei-publisher-lib .xar --------------------------------------
+# The base image's own bundled tei-publisher-lib crashes the annotate view with
+# `err:XQDY0025: element has more than one attribute 'data-tei'` (model:map() unconditionally
+# wrote that attribute even when one already existed). This local checkout carries the fix
+# (bumped to 6.1.1) - rebuild the .xar here rather than assume a pre-built one exists (it's a
+# gitignored build artifact, not something to commit).
+FROM debian:bookworm-slim AS lib-builder
+RUN apt-get update && apt-get install -y --no-install-recommends ant default-jre-headless && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY tei-publisher-lib/ ./
+RUN ant xar
+
 # --- Final stage ----------------------------------------------------------------------------
 FROM existdb/teipublisher:10.0.0
 
@@ -45,14 +57,31 @@ FROM existdb/teipublisher:10.0.0
 # correctly against this base image's glibc (docker/README.md documents the test).
 COPY --from=nodesrc /usr/local /usr/local
 
+# Dropped into eXist's own autodeploy/ convention: any .xar found there is installed at
+# database startup, before Jetty starts accepting requests - no explicit install step needed
+# in entrypoint.js. Fixes the XQDY0025 crash in the annotate view (see above).
+COPY --from=lib-builder /src/build/tei-publisher-lib.xar /exist/autodeploy/tei-publisher-lib-6.1.1.xar
+
 COPY --from=jinks-cli-builder /opt/jinks-cli /opt/jinks-cli
 COPY --from=components-builder /src/dist /opt/pb-components/dist
+# pb-page.js's i18next backend loads translations from resources/i18n/{{ns}}/{{lng}}.json,
+# sourced from this top-level i18n/ folder - a sibling of dist/, not bundled inside it. See
+# entrypoint.js's deployComponents() for where this lands in the running app.
+COPY tei-publisher-components/i18n /opt/pb-components/i18n
 
 # Profile source trees entrypoint.js deploys to the Jinks server on first boot. "annotate" is
 # copied whole (not just the files this project touched) so a `jinks update` later, if ever
 # run against this app, has a fully self-consistent profile source to compare against.
 COPY reconcile /opt/profiles/reconcile
 COPY tei-publisher-jinks/profiles/annotate /opt/profiles/annotate
+# "forms" is a stock Jinks profile (the base image already knows about it), but its bundled
+# config.json is missing "features.forms.enabled" - the flag forms-blocks.html's "scripts"/
+# "styles" templates gate on before loading fore.js/fore.css at all. Without it (and without
+# "forms" listed directly in the app's own `extends` - a plain dependency-of-a-dependency isn't
+# enough, see docker/app-config.json's comment) the annotate editor's <fx-fore> elements never
+# upgrade and raw Fore markup renders as plain visible text. Ship the patched profile source
+# and let it overwrite the stock one on first boot, same as annotate.
+COPY tei-publisher-jinks/profiles/forms /opt/profiles/forms
 
 COPY docker/entrypoint.js docker/app-config.json /opt/app/
 

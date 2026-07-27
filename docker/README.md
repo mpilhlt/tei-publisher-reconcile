@@ -108,6 +108,53 @@ Two real bugs surfaced and were fixed during this verification, not just the hap
   after the `config.json` PUT specifically to regenerate that module; skipping it left the raw
   config file changed but every already-compiled page still serving the old value.
 
+A second round of testing — this time rebuilding from a completely clean podman cache (only the
+base `existdb/teipublisher` image kept) — surfaced four more real bugs, all now fixed:
+
+- **Missing UI translations** (`facets.genre`, `search.placeholder`, `browse.items`, `login.user`,
+  `login.password`, ... rendered as raw i18next keys). Root cause: `pb-page.js`'s i18next backend
+  loads translations from `resources/i18n/{{ns}}/{{lng}}.json`, sourced from a top-level `i18n/`
+  folder in `tei-publisher-components` — a sibling of `dist/`, never bundled inside it and never
+  previously deployed by this image. Fixed by adding a second `deployTree()` call in
+  `deployComponents()` that uploads `tei-publisher-components/i18n` to `resources/i18n`.
+- **"template annotate-.html not found"** when switching from the normal document view to the
+  annotation editor. Root cause: the `toggle` template in `annotate`'s
+  `templates/annotation-blocks.html` built its link from `$context?doc?type`, which — in this
+  app's actually-deployed `base10` (confirmed to differ from the `tei-publisher-jinks` git
+  history, same class of drift as the `annotation_config_dispatcher_dormant` finding) — reaches
+  the template empty instead of populated. Fixed pragmatically by computing the doctype directly
+  from the reliably-present `$context?doc?content` node instead:
+  `config:document-type($context?doc?content/*)`.
+- **`err:XQDY0025: element has more than one attribute 'data-tei'`** crashing the annotate view.
+  This project's `tei-publisher-lib` checkout already carries the fix (bumped to `6.1.1`, see the
+  `tei_publisher_lib_data_tei_fix` project memory) but the image never baked it in — only the dev
+  container had it manually installed, which a full cache wipe erases. Fixed by adding a
+  `lib-builder` Dockerfile stage that runs `ant xar` against the patched checkout and drops the
+  result into `/exist/autodeploy/`, eXist's own "install this at startup" convention. The
+  first-boot ODD recompile now also retries a few times: `/api/odd` is gated by `x-constraints`
+  (a group-membership check, not a bad-password check — roaster's `auth.xql` returns the same
+  bare "Access denied" 401 either way), and that membership doesn't always propagate before
+  `jinks create` returns; the identical request retried a few seconds later succeeds.
+- **Raw Fore markup visibly leaking in the annotation editor's side panel** (JS function bodies,
+  `falsefalsefalsetrue`-style instance data, a permanently-visible "Cannot save to local register.
+  Please log in!" message even while logged in). Root cause, found via a Playwright check
+  (`customElements.get('fx-fore')` returned `undefined`): the `forms` profile's own
+  `templates/forms-blocks.html` gates its `fore.js`/`fore.css` `<script>`/`<link>` tags on
+  `$features?forms?enabled`, a flag its own `config.json` never sets — so those tags never render
+  and the `<fx-fore>` custom element never upgrades, leaving its raw markup visible as plain text.
+  Worse, `forms` is only reachable *transitively* (`annotate` depends on it) — Jinks only merges a
+  profile's `config.json` `features` block for profiles the **app** directly extends, not
+  transitive dependencies, so fixing the flag alone wasn't enough. Fixed both parts: this
+  project's own patched `tei-publisher-jinks/profiles/forms/config.json` sets
+  `features.forms.enabled: true` and is now deployed by `entrypoint.js` (same pattern as
+  `annotate`/`reconcile`), *and* `docker/app-config.json`'s `extends` list now lists `forms`
+  directly, not just via `annotate`.
+
+All four were re-verified together against a fully fresh `podman build` + `podman run` (no reused
+layers beyond the base image, no persisted volume): i18n resources serve real translations, the
+annotate view has no `XQDY0025`, the ODD recompile succeeds, and a Playwright check confirms
+`fx-fore` upgrades correctly with none of the raw-markup strings visible in the rendered page.
+
 ## Known limitations / next steps
 
 - Setup happens at container *first boot*, not baked into the image layers — simpler and more

@@ -124,15 +124,23 @@ authoritative reference if this drifts again.)
 curl/Cypress/the testbench/OpenRefine (everything in section 3 below and `README_MANUAL_TESTING.md`
 sections A/B/D). If you also want to click through the **annotation editor** (see
 `README_MANUAL_TESTING.md` §C for the click path), use this extended
-config instead — it adds `upload`, `jinntap`, `annotate`, `theme-base10`, and switches the theme
-palette to `neutral` (the default theme renders the annotate UI unusably):
+config instead — it adds `upload`, `jinntap`, `forms`, `annotate`, `theme-base10`, and switches the
+theme palette to `neutral` (the default theme renders the annotate UI unusably). `forms` must be
+listed **directly** here, not just pulled in transitively via `annotate`'s own `depends` — Jinks
+only merges a profile's `config.json` `features` block (here: `features.forms.enabled`, which
+gates whether `fore.js`/`fore.css` - the annotation editor's forms engine - get loaded at all) for
+profiles the *app* directly extends, not transitive dependencies. Omitting it here reproduces
+exactly the symptom this cost real time to diagnose: the annotate page loads and looks fine at
+first glance, but its `<fx-fore>` custom elements never upgrade, so raw Fore markup (instance
+values, JS bodies, conditional messages like "Cannot save to local register") renders as plain
+visible text instead of the interactive editor:
 ```json
 {
     "theme": { "colors": { "palette": "neutral" } },
     "overwrite": "default",
     "label": "TEI Publisher Reconciliation Demo",
     "id": "https://e-editiones.org/apps/tp-reconc",
-    "extends": ["base10", "demo-data", "theme-base10", "registers", "reconcile", "upload", "jinntap", "annotate"],
+    "extends": ["base10", "demo-data", "theme-base10", "registers", "reconcile", "upload", "jinntap", "forms", "annotate"],
     "pkg": { "abbrev": "tp-reconc" },
     "description": "Demo app for the OpenRefine Reconciliation Service profile"
 }

@@ -222,6 +222,15 @@ async function deployComponents() {
   const localDir = '/opt/pb-components/dist';
   const files = await walk(localDir, localDir, [], new Set(['node_modules', '.git']));
   await deployTree(localDir, files, `/db/apps/${APP_ABBREV}/resources/lib`, { htmlAsBinary: true });
+
+  // pb-page.js's i18next backend loads translations from `resources/i18n/{{ns}}/{{lng}}.json`,
+  // resolved relative to wherever the component script itself was loaded from - i.e.
+  // `resources/i18n/`, a sibling of `resources/lib/` above, NOT bundled inside dist/. Confirmed
+  // missing empirically: without this, generic UI strings (search.placeholder, login.user,
+  // browse.items, facets.*, ...) rendered as their raw i18next keys instead of translated text.
+  const i18nDir = '/opt/pb-components/i18n';
+  const i18nFiles = await walk(i18nDir, i18nDir, [], new Set(['node_modules', '.git']));
+  await deployTree(i18nDir, i18nFiles, `/db/apps/${APP_ABBREV}/resources/i18n`);
 }
 
 function spawnNode(args, opts = {}) {
@@ -310,7 +319,34 @@ async function main() {
     log(`"${APP_ABBREV}" not found - running first-boot setup...`);
     await deployProfileTree('/opt/profiles/reconcile', 'reconcile');
     await deployProfileTree('/opt/profiles/annotate', 'annotate');
+    // Patched stock profile (see ../Dockerfile's COPY comment): fixes a missing
+    // features.forms.enabled flag that otherwise silently disables fore.js/fore.css loading.
+    await deployProfileTree('/opt/profiles/forms', 'forms');
     await createApp();
+    // Safety net for the patched tei-publisher-lib .xar (see ../Dockerfile's autodeploy
+    // COPY): autodeploy installs it before Jetty accepts requests, so a fresh app's ODDs
+    // should already compile against the fixed library - but explicitly recompiling here
+    // matches the exact, proven-working procedure (see README_TEST_CONTAINER.md) rather
+    // than relying on that timing assumption alone.
+    //
+    // /api/odd is gated by x-constraints (roaster's auth.xql: authenticated-but-not-yet-
+    // authorized reads as a plain 401 "Access denied", same shape as a bad password) checked
+    // against the app-user's group membership - immediately after `jinks create` returns,
+    // that membership hasn't always propagated yet (confirmed empirically: the identical
+    // request, retried a few seconds later by hand, succeeds). Retry instead of trusting the
+    // first attempt.
+    let recompileStatus;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const recompile = await fetch(`${BASE}/exist/apps/${APP_ABBREV}/api/odd`, {
+        method: 'POST',
+        headers: { Authorization: basicAuthHeader(APP_USER, APP_PASS) },
+      });
+      recompileStatus = recompile.status;
+      if (recompileStatus === 200) break;
+      log(`recompile ODDs attempt ${attempt}: HTTP ${recompileStatus} - retrying...`);
+      await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+    }
+    log(`recompiled ODDs: HTTP ${recompileStatus}`);
   } else {
     log(`"${APP_ABBREV}" already exists - skipping first-boot setup.`);
   }
