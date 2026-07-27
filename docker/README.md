@@ -19,6 +19,14 @@ Two Node-based builder stages need network access (npm installs) and take a few 
 first time; the final stage itself is just file copies, so rebuilds after a small source change
 are fast.
 
+If `podman build` fails with `short-name "..." did not resolve to an alias and no
+containers-registries.conf(5) was found`: your podman has no `docker.io` entry in its
+unqualified-search-registries, and this Dockerfile already uses fully-qualified image names
+(`docker.io/library/node:20-slim`, `docker.io/existdb/teipublisher:10.0.0`, ...) specifically to
+avoid depending on that config — if you still hit this on an older checkout, `git pull` to pick up
+that fix, or add `unqualified-search-registries = ["docker.io"]` to
+`/etc/containers/registries.conf` / `~/.config/containers/registries.conf` yourself.
+
 ## Run
 
 ```bash

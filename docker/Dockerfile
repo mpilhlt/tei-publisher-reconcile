@@ -17,10 +17,10 @@
 #   podman run -d --name tp-reconc-demo -p 8080:8080 tp-reconc-demo
 
 # --- Stage: source of the Node.js runtime we copy into the final (shell-less) image -------
-FROM node:20-slim AS nodesrc
+FROM docker.io/library/node:20-slim AS nodesrc
 
 # --- Stage: build the self-hosted tei-publisher-components bundle -------------------------
-FROM node:20-slim AS components-builder
+FROM docker.io/library/node:20-slim AS components-builder
 WORKDIR /src
 COPY tei-publisher-components/package.json tei-publisher-components/package-lock.json ./
 # `npm install` (not `ci`): the committed lockfile has drifted from package.json in this
@@ -33,7 +33,7 @@ COPY tei-publisher-components/ ./
 RUN npm run build:production
 
 # --- Stage: install jinks-cli globally, in an environment with a real shell/npm -----------
-FROM node:20-slim AS jinks-cli-builder
+FROM docker.io/library/node:20-slim AS jinks-cli-builder
 # Pinned to the version confirmed working throughout this project's development.
 RUN npm install -g @teipublisher/jinks-cli@2.4.0 --prefix /opt/jinks-cli
 
@@ -43,14 +43,19 @@ RUN npm install -g @teipublisher/jinks-cli@2.4.0 --prefix /opt/jinks-cli
 # wrote that attribute even when one already existed). This local checkout carries the fix
 # (bumped to 6.1.1) - rebuild the .xar here rather than assume a pre-built one exists (it's a
 # gitignored build artifact, not something to commit).
-FROM debian:bookworm-slim AS lib-builder
+FROM docker.io/library/debian:bookworm-slim AS lib-builder
 RUN apt-get update && apt-get install -y --no-install-recommends ant default-jre-headless && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY tei-publisher-lib/ ./
 RUN ant xar
 
 # --- Final stage ----------------------------------------------------------------------------
-FROM existdb/teipublisher:10.0.0
+# Fully-qualified (not the short "existdb/teipublisher:10.0.0"): rootless podman on hosts with
+# no containers-registries.conf / no docker.io unqualified-search-registries entry refuses to
+# guess the registry for short names and fails the build outright. Same fix already applied to
+# skills/teipublisher-reconciliation-testing/scripts/up.sh - see the local_env_node_podman
+# project memory.
+FROM docker.io/existdb/teipublisher:10.0.0
 
 # Bring in a real Node.js runtime - copy the whole /usr/local tree (not just the `node`
 # binary) so npm's own supporting files come along too. Confirmed empirically to run
