@@ -257,6 +257,34 @@ app, whichever profile.
   `customElements.get('the-tag-name')` plus scanning `page.innerText('body')` for text that should
   only ever be conditionally visible — pinpoints this in seconds; grepping rendered HTML for the
   expected `<script src>` is the non-browser equivalent and almost as fast.
+- **A whole panel/widget "looking broken" (misshapen boxes, invisible labels, tiny icons in huge
+  empty space) is very often a CSS *specificity* collision with a third-party CDN library's own
+  stylesheet, not a missing-stylesheet or missing-markup problem** — and this project's own custom
+  CSS can lose that fight even when it visually "should" apply. Concretely: a plain attribute
+  selector like `[relevant] { display: block; }` (specificity `0,1,0`) beats a two-type-selector
+  rule like `some-custom-element some-child { display: grid; }` (specificity `0,0,2`) *regardless
+  of stylesheet load order* — attribute/class selectors always outrank pure type selectors. Don't
+  assume "the stylesheet loads fine (200, no CORS error)" or "the selector text matches the
+  element" (`element.matches(selector)` returning true) means a given declaration actually *wins*
+  the cascade — those only confirm the rule is in play, not that it beats every other matching
+  rule. To find the actual winner for a specific broken property: `getComputedStyle(el)` for the
+  computed value, then iterate `document.styleSheets`/`sheet.cssRules` and test
+  `el.matches(rule.selectorText)` for every stylesheet (note CDN stylesheets loaded without
+  `crossorigin` throw on `.cssRules` — fall back to fetching the raw CSS text with `curl` instead)
+  to see every candidate rule and compare their specificities by hand. Fix by raising the losing
+  selector's specificity to match the mechanism the library itself uses for toggling state (e.g.
+  add the same attribute the library stamps on the element, like `[relevant]`, to your own
+  selector) rather than reaching for `!important` first — `!important` wins unconditionally against
+  *every* non-important rule, including ones you still need to lose in the opposite state (e.g. a
+  library's own `[nonrelevant] { display: none; }`), which can silently trade one bug for another.
+- **A GUI regression test suite that only asserts *functional* behavior (request URLs, form field
+  values, element counts) can stay green for months while the actual rendered UI is visually
+  broken** — Cypress/Playwright assertions on data flow don't catch "the layout collapsed" or "the
+  label is invisible" unless something explicitly screenshots and checks pixel/style state. If a
+  feature exercises real interactive UI (not just API responses), a one-off screenshot check is
+  worth doing periodically even when the functional test suite is fully green, especially after
+  upgrading a pinned third-party dependency (a form engine, icon library, etc.) whose own CSS
+  ships from a CDN outside this project's control.
 
 ---
 

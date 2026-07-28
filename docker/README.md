@@ -167,6 +167,27 @@ base `existdb/teipublisher` image kept) — surfaced four more real bugs, all no
   the sprite itself, independent of whether the app's base10 supports the `theme.icons`
   mechanism. (The `config.json` `theme.icons` declaration was left in place too — harmless, and
   correct for any base10 that *does* implement the loop.)
+- **The entire annotation-editor side panel looked broken once it actually rendered** —
+  misshapen "cards" with no visible border, invisible-looking form labels, a "minuscule" save
+  icon, everything cramped into far too little vertical space. **Not Docker-specific** — confirmed
+  by reproducing it outside Docker too, in a plain dev-container app on the stock base image, then
+  applying and re-verifying the same fix there before rebuilding the Docker image. Root cause: a
+  CSS specificity collision. `annotate.css`'s `fx-fore fx-group { display: grid; ... }` rule
+  (specificity `0,0,2`, two type selectors) is what drives every card's grow/shrink animation and
+  layout — but `@jinntec/fore`'s own CDN-loaded `fore.css` has a generic `[relevant] { display:
+  block; }` rule (specificity `0,1,0`, an attribute selector) that Fore itself stamps onto every
+  currently-visible element (`relevant=""`). Attribute selectors always outrank pure type
+  selectors regardless of source order, so *every* visible `fx-group` silently fell back to plain
+  block flow instead of the intended grid layout — confirmed directly via Playwright:
+  `getComputedStyle` on a "card" `fx-group` showed `display: block`, `height: 36px`, while its own
+  child `<header>` measured `54px` tall (overflowing its collapsed parent). This has nothing to do
+  with this project's Docker packaging - it's been latent in the `annotate` profile itself since it
+  started depending on `forms`/Fore (2026-02-18); the automated GUI regression tests only ever
+  assert functional behavior (request URLs, form field values), never checked CSS, so nobody
+  noticed until a real screenshot was taken. Fixed by raising the selector's specificity to match:
+  `fx-fore fx-group[relevant] { display: grid; ... }` (specificity `0,1,2`) — wins the cascade
+  regardless of stylesheet load order, and doesn't touch the (already-correct) hidden/`nonrelevant`
+  case at all since that selector simply won't match those elements.
 - **Raw Fore markup visibly leaking in the annotation editor's side panel** (JS function bodies,
   `falsefalsefalsetrue`-style instance data, a permanently-visible "Cannot save to local register.
   Please log in!" message even while logged in). Root cause, found via a Playwright check
