@@ -1,9 +1,12 @@
 # Reconciliation demo image
 
-A self-contained image with the `reconcile` profile, the patched `annotate` profile (dispatcher
-+ field-mapping fixes — see the `annotation_config_dispatcher_dormant` project memory), and a
-self-hostable `tei-publisher-components` build all baked in. `docker run` and it's up — no manual
-`jinks create`/profile upload steps.
+A self-contained image with the `reconcile` profile, the patched `annotate` profile[^1], and a
+self-hostable `tei-publisher-components` build all baked in. `docker run` (or `podman run`) and
+it's up — no manual profile upload or `jinks create` steps.
+
+[^1]: In the context of the reconciliation project, the `annotate` profile included with
+`tei-publisher-jinks` was updated to integrate mapping of multiple authority db fields to
+different XML constructs — see the `annotation_config_dispatcher_dormant` project memory.
 
 ## Build
 
@@ -83,12 +86,16 @@ still reach an app on a persisted volume without a full re-init).
 
 ## Why a custom entrypoint at all
 
-The base image (`existdb/teipublisher:10.0.0`) has no shell and no coreutils — confirmed by
-`podman exec teipub /bin/sh`, which fails with "executable file not found". Everything here
-(`entrypoint.js`, jinks-cli) runs as plain Node scripts invoked directly (`node /path/to/script.js`),
-never relying on a shebang or shell resolution — Node itself was copied in from a normal
-`node:20-slim` image (confirmed to run correctly against this base image's glibc). See
-`entrypoint.js`'s own header comment for the full first-boot sequence.
+The base image (`existdb/teipublisher:10.0.0`) has no shell and no coreutils. Likewise, everything
+here (`entrypoint.js`, jinks-cli) runs as plain Node scripts invoked directly
+(`node /path/to/script.js`), never relying on a shebang or shell resolution — Node itself was
+copied in from a normal `node:20-slim` image. See `entrypoint.js`'s own header comment for the
+full first-boot sequence.
+
+## Testing
+
+For some standard ways to test and verify the functionality of the running container, see the
+comments in [../README_MANUAL_TESTING.md](../README_MANUAL_TESTING.md).
 
 ## Verified end to end
 
