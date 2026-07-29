@@ -96,7 +96,6 @@ podman push ghcr.io/mpilhlt/tei-publisher-reconcile/tp-reconc-demo:<version>
 | [`reconcile/`](reconcile) | The Jinks profile implementing the reconciliation server. |
 | [`docker/`](docker) | The self-contained demo image: `Dockerfile`, entrypoint, config. |
 | [`skills/`](skills) | An agent skill automating the profile-authoring/test/deploy loop used to build this project. |
-| [`code-container/`](code-container) | A sandboxed container setup for running coding agents against this repo. |
 | `README_TEST_CONTAINER.md` | Setting up a local podman/Jinks dev environment from scratch. |
 | `README_MANUAL_TESTING.md` | Hands-on routines for verifying the server and client both work. |
 

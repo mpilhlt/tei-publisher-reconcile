@@ -10,6 +10,10 @@ reconc-testbench
 reconc-testbench-0.2
 .opencode
 
+# Sandbox-container sketch for running agent sessions, not yet functional (see
+# conversation/memory) - kept locally for later, not tracked upstream.
+code-container
+
 # Generated-app checkouts (jinks-cli `jinks create`/`update --sync` output; build
 # artifacts, not source) — see skills/teipublisher-reconciliation-testing.
 *-checkout/
