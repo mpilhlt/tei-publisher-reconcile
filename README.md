@@ -79,6 +79,16 @@ locally-run copy — see [`README_MANUAL_TESTING.md`](README_MANUAL_TESTING.md))
 `/api/reconcile` URL to exercise match, suggest, preview, and data-extension directly
 against the spec's own reference client.
 
+## Publishing the image
+
+```bash
+# podman login ghcr.io -u <github-username> --password-stdin   # PAT needs write:packages
+podman tag localhost/tp-reconc-demo:latest ghcr.io/mpilhlt/tei-publisher-reconcile/tp-reconc-demo:latest
+podman tag localhost/tp-reconc-demo:latest ghcr.io/mpilhlt/tei-publisher-reconcile/tp-reconc-demo:<version>
+podman push ghcr.io/mpilhlt/tei-publisher-reconcile/tp-reconc-demo:latest
+podman push ghcr.io/mpilhlt/tei-publisher-reconcile/tp-reconc-demo:<version>
+```
+
 ## Repository layout
 
 | Path | What it is |
@@ -89,12 +99,28 @@ against the spec's own reference client.
 | [`code-container/`](code-container) | A sandboxed container setup for running coding agents against this repo. |
 | `README_TEST_CONTAINER.md` | Setting up a local podman/Jinks dev environment from scratch. |
 | `README_MANUAL_TESTING.md` | Hands-on routines for verifying the server and client both work. |
-| `README_PUBLISH_CONTAINER_IMAGE.md` | Steps to publish the demo image to `ghcr.io`. |
 
-The `annotate` client patches, and other TEI Publisher components this project depends on
-(`tei-publisher-jinks`, `tei-publisher-components`, `tei-publisher-lib`, `roaster`, ...), are
-maintained as separate forks (see the `References` section of `AGENTS.md`) rather than
-vendored into this repository.
+## Forked & patched dependencies
+
+This project's client side, and a few of TEI Publisher v10's own building blocks, needed
+real fixes and new features (see each fork's commit history for details). None of these
+forks are vendored into this repository — see `.gitignore` — they're cloned locally as
+siblings of this repo for development; see `AGENTS.md`'s "References" section for exact
+paths. **Once things have settled, the intent is to submit pull requests upstream** for
+each fork's real changes (not the ones below with no changes yet, kept only for pinning/
+reference).
+
+| Fork | Upstream | Branch(es) | What's patched |
+|---|---|---|---|
+| [tei-publisher-jinks](https://github.com/mpilhlt/tei-publisher-jinks) | [eeditiones/jinks](https://github.com/eeditiones/jinks) | `feature/reconcile` | The `annotate` profile's reconciliation-client wiring (connector config, field mapping, `keyMap` fixes), plus a couple of shared `base10` fixes. |
+| [tei-publisher-components](https://github.com/mpilhlt/tei-publisher-components) | [eeditiones/tei-publisher-components](https://github.com/eeditiones/tei-publisher-components) | `feature/reconcile` | `pb-authority-lookup`'s connectors (`ReconciliationService`, GND, GeoNames), 0.2/1.0-draft protocol support, several client-side fixes. |
+| [tei-publisher-lib](https://github.com/mpilhlt/tei-publisher-lib) | [eeditiones/tei-publisher-lib](https://github.com/eeditiones/tei-publisher-lib) | `feature/reconcile` | One fix: `model:map()` wrote a duplicate `@data-tei` attribute when one already existed. |
+| [tei-publisher-roaster](https://github.com/mpilhlt/tei-publisher-roaster) (roaster) | [eeditiones/roaster](https://github.com/eeditiones/roaster) | `feature/reconcile` | A route-matching fix (unanchored regex; trailing-slash tolerance). |
+| [tei-publisher-app](https://github.com/mpilhlt/tei-publisher-app) | [eeditiones/tei-publisher-app](https://github.com/eeditiones/tei-publisher-app) | `feature/reconcile` | Docs only — the `reconcile` profile's documentation pages, since that's where TEI Publisher's public docs site content actually lives. |
+| [reconc-testbench](https://github.com/mpilhlt/reconc-testbench) | [reconciliation-api/testbench](https://github.com/reconciliation-api/testbench) | `master` (1.0-draft UI), `testbench-0.2` (0.2 UI) | Fixed the Extend tab's results table, which only ever handled the pre-1.0 `rows` shape. |
+| [tei-publisher-jinks-cli](https://github.com/mpilhlt/tei-publisher-jinks-cli) (jinks-cli) | [eeditiones/jinks-cli](https://github.com/eeditiones/jinks-cli) | `feature/reconcile` | Unmodified — used as the `jinks` CLI for local dev; the demo image installs the published npm package instead. |
+| [tei-publisher-jinks-templates](https://github.com/mpilhlt/tei-publisher-jinks-templates) (jinks-templates) | [eeditiones/jinks-templates](https://github.com/eeditiones/jinks-templates) | `feature/reconcile` | Unmodified — reference only. |
+| [reconc-specs](https://github.com/mpilhlt/reconc-specs) | [reconciliation-api/specs](https://github.com/reconciliation-api/specs) | `master` | Unmodified — JSON Schemas and examples used for conformance testing. |
 
 ## Conformance
 
