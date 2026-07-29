@@ -109,17 +109,22 @@ paths. **Once things have settled, the intent is to submit pull requests upstrea
 each fork's real changes (not the ones below with no changes yet, kept only for pinning/
 reference).
 
+**Note:** each fork's link below points at its `feature/reconcile` branch specifically,
+*not* the fork's default branch — every fork's default branch on GitHub still just
+mirrors its upstream's `main`/`master` unmodified, so browsing to the bare repo URL
+(without a branch) will not show the patches described here.
+
 | Fork | Upstream | Branch(es) | What's patched |
 |---|---|---|---|
-| [tei-publisher-jinks](https://github.com/mpilhlt/tei-publisher-jinks) | [eeditiones/jinks](https://github.com/eeditiones/jinks) | `feature/reconcile` | The `annotate` profile's reconciliation-client wiring (connector config, field mapping, `keyMap` fixes), plus a couple of shared `base10` fixes. |
-| [tei-publisher-components](https://github.com/mpilhlt/tei-publisher-components) | [eeditiones/tei-publisher-components](https://github.com/eeditiones/tei-publisher-components) | `feature/reconcile` | `pb-authority-lookup`'s connectors (`ReconciliationService`, GND, GeoNames), 0.2/1.0-draft protocol support, several client-side fixes. |
-| [tei-publisher-lib](https://github.com/mpilhlt/tei-publisher-lib) | [eeditiones/tei-publisher-lib](https://github.com/eeditiones/tei-publisher-lib) | `feature/reconcile` | One fix: `model:map()` wrote a duplicate `@data-tei` attribute when one already existed. |
-| [tei-publisher-roaster](https://github.com/mpilhlt/tei-publisher-roaster) (roaster) | [eeditiones/roaster](https://github.com/eeditiones/roaster) | `feature/reconcile` | A route-matching fix (unanchored regex; trailing-slash tolerance). |
-| [tei-publisher-app](https://github.com/mpilhlt/tei-publisher-app) | [eeditiones/tei-publisher-app](https://github.com/eeditiones/tei-publisher-app) | `feature/reconcile` | Docs only — the `reconcile` profile's documentation pages, since that's where TEI Publisher's public docs site content actually lives. |
-| [reconc-testbench](https://github.com/mpilhlt/reconc-testbench) | [reconciliation-api/testbench](https://github.com/reconciliation-api/testbench) | `master` (1.0-draft UI), `testbench-0.2` (0.2 UI) | Fixed the Extend tab's results table, which only ever handled the pre-1.0 `rows` shape. |
-| [tei-publisher-jinks-cli](https://github.com/mpilhlt/tei-publisher-jinks-cli) (jinks-cli) | [eeditiones/jinks-cli](https://github.com/eeditiones/jinks-cli) | `feature/reconcile` | Unmodified — used as the `jinks` CLI for local dev; the demo image installs the published npm package instead. |
-| [tei-publisher-jinks-templates](https://github.com/mpilhlt/tei-publisher-jinks-templates) (jinks-templates) | [eeditiones/jinks-templates](https://github.com/eeditiones/jinks-templates) | `feature/reconcile` | Unmodified — reference only. |
-| [reconc-specs](https://github.com/mpilhlt/reconc-specs) | [reconciliation-api/specs](https://github.com/reconciliation-api/specs) | `master` | Unmodified — JSON Schemas and examples used for conformance testing. |
+| [tei-publisher-jinks](https://github.com/mpilhlt/tei-publisher-jinks/tree/feature/reconcile) | [eeditiones/jinks](https://github.com/eeditiones/jinks) | `feature/reconcile` | The `annotate` profile's reconciliation-client wiring (connector config, field mapping, `keyMap` fixes), plus a couple of shared `base10` fixes. |
+| [tei-publisher-components](https://github.com/mpilhlt/tei-publisher-components/tree/feature/reconcile) | [eeditiones/tei-publisher-components](https://github.com/eeditiones/tei-publisher-components) | `feature/reconcile` | `pb-authority-lookup`'s connectors (`ReconciliationService`, GND, GeoNames), 0.2/1.0-draft protocol support, several client-side fixes. |
+| [tei-publisher-lib](https://github.com/mpilhlt/tei-publisher-lib/tree/feature/reconcile) | [eeditiones/tei-publisher-lib](https://github.com/eeditiones/tei-publisher-lib) | `feature/reconcile` | One fix: `model:map()` wrote a duplicate `@data-tei` attribute when one already existed. |
+| [tei-publisher-roaster](https://github.com/mpilhlt/tei-publisher-roaster/tree/feature/reconcile) (roaster) | [eeditiones/roaster](https://github.com/eeditiones/roaster) | `feature/reconcile` | A route-matching fix (unanchored regex; trailing-slash tolerance). |
+| [tei-publisher-app](https://github.com/mpilhlt/tei-publisher-app/tree/feature/reconcile) | [eeditiones/tei-publisher-app](https://github.com/eeditiones/tei-publisher-app) | `feature/reconcile` | Docs only — the `reconcile` profile's documentation pages, since that's where TEI Publisher's public docs site content actually lives. |
+| [reconc-testbench](https://github.com/mpilhlt/reconc-testbench) ([upstream `testbench-0.2` branch](https://github.com/reconciliation-api/testbench/tree/testbench-0.2)) | [reconciliation-api/testbench](https://github.com/reconciliation-api/testbench) | `master` (1.0-draft UI, and the fork's default branch), `testbench-0.2` (0.2 UI, used unmodified straight from upstream — never pushed to the fork) | Fixed the Extend tab's results table, which only ever handled the pre-1.0 `rows` shape. |
+| [tei-publisher-jinks-cli](https://github.com/mpilhlt/tei-publisher-jinks-cli/tree/feature/reconcile) (jinks-cli) | [eeditiones/jinks-cli](https://github.com/eeditiones/jinks-cli) | `feature/reconcile` | Unmodified — used as the `jinks` CLI for local dev; the demo image installs the published npm package instead. |
+| [tei-publisher-jinks-templates](https://github.com/mpilhlt/tei-publisher-jinks-templates/tree/feature/reconcile) (jinks-templates) | [eeditiones/jinks-templates](https://github.com/eeditiones/jinks-templates) | `feature/reconcile` | Unmodified — reference only. |
+| [reconc-specs](https://github.com/mpilhlt/reconc-specs) | [reconciliation-api/specs](https://github.com/reconciliation-api/specs) | `master` (the fork's default branch) | Unmodified — JSON Schemas and examples used for conformance testing. |
 
 ## Conformance
 
