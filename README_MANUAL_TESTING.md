@@ -2,10 +2,9 @@
 
 Quick, hands-on routines to confirm both reconciliation aspects of this project actually
 work: **(A)** the `reconcile` profile as a server, and **(B)** the `annotate` editor's
-Reconciliation Service connector as a client. For a presentation script (intro to
-reconciliation, live-demo flow, screenshot suggestions), see
-**[`README_PRESENTATION.md`](README_PRESENTATION.md)** instead — this file is purely
-functional verification.
+Reconciliation Service connector as a client. For a quicker, higher-level tour instead of
+exhaustive verification, see the "Exploring the demo" section of the main
+**[`README.md`](README.md)**.
 
 Everything below assumes the local podman container is up and `tp-reconc` is generated
 with the extended config (`annotate`/`upload`/`jinntap`/`theme-base10` on top of

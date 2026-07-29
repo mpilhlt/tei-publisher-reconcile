@@ -45,16 +45,39 @@ http://localhost:8080/exist/apps/tp-reconc
 http://localhost:8080/exist/apps/tp-reconc/api/reconcile
 ```
 
-Point an [OpenRefine](https://openrefine.org/) reconciliation client, or the
-[reconciliation-api test bench](https://reconciliation-api.github.io/testbench/1.0/), at that
-`/api/reconcile` URL to try the server on its own; or open the app itself and use the
-annotation editor to try the client side (see
-[`README_MANUAL_TESTING.md`](README_MANUAL_TESTING.md) for a guided walkthrough of both).
+See "Exploring the demo" below for what to actually try once it's up.
 
 No volume is mounted by default, so a removed container loses all state and a fresh one
 always starts from the same pristine demo data — see [`docker/README.md`](docker/README.md)
 for persistence, the environment variables the image accepts (including a self-hosted vs.
 CDN switch for the web-component bundle), and how to build the image yourself.
+
+## Exploring the demo
+
+**As a reconciliation *server*, from OpenRefine:** in OpenRefine, open or create a project
+with a column of names (a mix of well-known ones and the demo's own — e.g. "Barth" — works
+well), then Column ▾ → **Reconcile → Start reconciling...** → **Add Standard Service...** →
+paste `http://localhost:8080/exist/apps/tp-reconc/api/reconcile`, pick a type, and
+**Start Reconciling**. Try disambiguating a same-named match by reconciling with a second
+column as a property condition, and pulling data back into the sheet with **Add columns
+from reconciled values...** (for this one, append `?version=0.2` to the service URL —
+OpenRefine's own client only understands the older manifest shape for data extension
+specifically, regardless of which spec version the server itself supports).
+
+**As a reconciliation *client*, in the annotation editor:** open the app, navigate to a
+document, and use the annotate editor. Click an already-linked entity mention to see a
+live preview (biography, dates, ...) rendered from its linked authority record, not just a
+bare id. Select an untagged mention, tag it as a person/place/organization/etc., and open
+the search panel (pencil icon) — results are federated from more than one source at once
+(the app's own local register alongside external authorities like GND), badged by origin.
+Picking a candidate links the mention and writes a real external identifier into the
+markup.
+
+**Against the spec itself:** point the official
+[reconciliation-api test bench](https://reconciliation-api.github.io/testbench/1.0/) (or a
+locally-run copy — see [`README_MANUAL_TESTING.md`](README_MANUAL_TESTING.md)) at the same
+`/api/reconcile` URL to exercise match, suggest, preview, and data-extension directly
+against the spec's own reference client.
 
 ## Repository layout
 
@@ -66,7 +89,6 @@ CDN switch for the web-component bundle), and how to build the image yourself.
 | [`code-container/`](code-container) | A sandboxed container setup for running coding agents against this repo. |
 | `README_TEST_CONTAINER.md` | Setting up a local podman/Jinks dev environment from scratch. |
 | `README_MANUAL_TESTING.md` | Hands-on routines for verifying the server and client both work. |
-| `README_PRESENTATION.md` | A ~20-minute talk script introducing reconciliation to a TEI/DH audience. |
 | `README_PUBLISH_CONTAINER_IMAGE.md` | Steps to publish the demo image to `ghcr.io`. |
 
 The `annotate` client patches, and other TEI Publisher components this project depends on
