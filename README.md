@@ -120,7 +120,7 @@ mirrors its upstream's `main`/`master` unmodified, so browsing to the bare repo 
 
 | Fork | Upstream | Branch(es) | What's patched |
 |---|---|---|---|
-| [tei-publisher-jinks](https://github.com/mpilhlt/tei-publisher-jinks/tree/feature/reconcile) | [eeditiones/jinks](https://github.com/eeditiones/jinks) | `feature/reconcile` | The `annotate` profile's reconciliation-client wiring (connector config, field mapping, `keyMap` fixes), plus a couple of shared `base10` fixes. |
+| [tei-publisher-jinks](https://github.com/mpilhlt/tei-publisher-jinks/tree/feature/reconcile) | [eeditiones/jinks](https://github.com/eeditiones/jinks) | `feature/reconcile` | The `annotate` profile's reconciliation-client wiring (connector config, field mapping, `keyMap` fixes) and a `forms` profile fix (missing `features.forms.enabled`). Does **not** yet include a fix for the `base10` ODD-stub bug below — that's still only worked around downstream. |
 | [tei-publisher-components](https://github.com/mpilhlt/tei-publisher-components/tree/feature/reconcile) | [eeditiones/tei-publisher-components](https://github.com/eeditiones/tei-publisher-components) | `feature/reconcile` | `pb-authority-lookup`'s connectors (`ReconciliationService`, GND, GeoNames), 0.2/1.0-draft protocol support, several client-side fixes. |
 | [tei-publisher-lib](https://github.com/mpilhlt/tei-publisher-lib/tree/feature/reconcile) | [eeditiones/tei-publisher-lib](https://github.com/eeditiones/tei-publisher-lib) | `feature/reconcile` | One fix: `model:map()` wrote a duplicate `@data-tei` attribute when one already existed. |
 | [tei-publisher-roaster](https://github.com/mpilhlt/tei-publisher-roaster/tree/feature/reconcile) (roaster) | [eeditiones/roaster](https://github.com/eeditiones/roaster) | `feature/reconcile` | A route-matching fix (unanchored regex; trailing-slash tolerance). |
@@ -129,6 +129,23 @@ mirrors its upstream's `main`/`master` unmodified, so browsing to the bare repo 
 | [tei-publisher-jinks-cli](https://github.com/mpilhlt/tei-publisher-jinks-cli/tree/feature/reconcile) (jinks-cli) | [eeditiones/jinks-cli](https://github.com/eeditiones/jinks-cli) | `feature/reconcile` | Unmodified — used as the `jinks` CLI for local dev; the demo image installs the published npm package instead. |
 | [tei-publisher-jinks-templates](https://github.com/mpilhlt/tei-publisher-jinks-templates/tree/feature/reconcile) (jinks-templates) | [eeditiones/jinks-templates](https://github.com/eeditiones/jinks-templates) | `feature/reconcile` | Unmodified — reference only. |
 | [reconc-specs](https://github.com/mpilhlt/reconc-specs) | [reconciliation-api/specs](https://github.com/reconciliation-api/specs) | `master` (the fork's default branch) | Unmodified — JSON Schemas and examples used for conformance testing. |
+
+**Known gap, not yet fixed upstream:** `base10`'s own `setup.xql` (present unmodified in the
+`tei-publisher-jinks` fork, i.e. this bug is real in `eeditiones/jinks` too, not just the demo
+image's base) unconditionally overwrites any profile-declared `"odds"` entry with a **blank**
+starter ODD on a fresh `jinks create`, regardless of whether the declaring profile — `annotate`
+here — already ships real content at that path. This silently discards every
+`cssClass="annotation ... authority"` rule `annotations.odd` defines, which is what makes entity
+mentions clickable in the annotation editor at all. **The only fix that exists today is a
+workaround in this repo's own `docker/entrypoint.js`** (`restoreAnnotationsOdd()`, re-PUTs the real
+file right after app creation) — *not* a fix in the `tei-publisher-jinks` fork itself, so a PR from
+that fork as it stands would **not** resolve this for anyone using Jinks directly (outside this
+project's Docker automation). Properly fixing `base10/setup.xql` there is deliberately deferred:
+doing so would also mean revisiting whether `docker/entrypoint.js`'s workaround becomes redundant
+(and either removing it or keeping it as a defensive no-op), then rebuilding and re-running the
+full container regression suite against that change — real, but out of scope for now. Full
+investigation and root-cause details in [`docker/README.md`](docker/README.md)'s troubleshooting
+log.
 
 ## Conformance
 
