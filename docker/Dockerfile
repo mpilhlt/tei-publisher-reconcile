@@ -1,6 +1,7 @@
 # Self-contained demo image for the reconciliation project: reconcile profile + the patched
 # annotate profile (dispatcher/field-mapping fixes, see the annotation_config_dispatcher_dormant
-# project memory) + a self-hostable tei-publisher-components build, all baked in.
+# project memory) + a self-hostable tei-publisher-components build + patched tei-publisher-lib
+# and roaster packages, all baked in.
 #
 # The base image (existdb/teipublisher:10.0.0) has NO shell and NO coreutils - confirmed
 # empirically (no /bin/sh, no cat/ls/which, java only). Every stage below that needs a real
@@ -37,6 +38,20 @@ FROM docker.io/library/node:20-slim AS jinks-cli-builder
 # Pinned to the version confirmed working throughout this project's development.
 RUN npm install -g @teipublisher/jinks-cli@2.4.0 --prefix /opt/jinks-cli
 
+# --- Stage: build the patched roaster .xar -------------------------------------------------
+# The base image's own bundled roaster has an unanchored route-matching regex
+# (eeditiones/roaster#122): any path merely starting with a declared route matches it, e.g.
+# GET /api/reconcile/v0.2 wrongly matches the bare /api/reconcile route and returns its
+# manifest instead of 404. This checkout carries the fix (bumped to 1.13.0 alongside picking
+# up upstream's own 1.13.0 release) - build the .xar here, installed the same version-aware
+# way as tei-publisher-lib below (see roaster_route_regex_and_caching project memory).
+FROM docker.io/library/node:20-slim AS roaster-builder
+WORKDIR /src
+COPY tei-publisher-roaster/package.json tei-publisher-roaster/package-lock.json ./
+RUN npm install
+COPY tei-publisher-roaster/ ./
+RUN npm run build
+
 # --- Stage: build the patched tei-publisher-lib .xar --------------------------------------
 # The base image's own bundled tei-publisher-lib crashes the annotate view with
 # `err:XQDY0025: element has more than one attribute 'data-tei'` (model:map() unconditionally
@@ -70,6 +85,7 @@ COPY --from=nodesrc /usr/local /usr/local
 # which *does* perform a real version-aware upgrade install (the exact, proven-working procedure
 # documented in README_TEST_CONTAINER.md).
 COPY --from=lib-builder /src/build/tei-publisher-lib.xar /opt/app/tei-publisher-lib-6.1.1.xar
+COPY --from=roaster-builder /src/dist/roaster-1.13.0.xar /opt/app/roaster-1.13.0.xar
 
 COPY --from=jinks-cli-builder /opt/jinks-cli /opt/jinks-cli
 COPY --from=components-builder /src/dist /opt/pb-components/dist

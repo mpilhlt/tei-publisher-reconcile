@@ -137,6 +137,31 @@ async function installTeiPublisherLib() {
   log('installed tei-publisher-lib 6.1.1 (upgrading the stock 6.0.2)');
 }
 
+// Same version-aware-upgrade rationale and mechanism as installTeiPublisherLib() above,
+// for the base image's own bundled roaster (fixes eeditiones/roaster#122's unanchored
+// route-matching regex - see roaster_route_regex_and_caching project memory).
+async function installRoaster() {
+  const xarPath = '/opt/app/roaster-1.13.0.xar';
+  const xar = await readFile(xarPath);
+  const dbPath = '/db/roaster-1.13.0.xar';
+  const put = await fetch(`${BASE}/exist/rest${dbPath}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      Authorization: basicAuthHeader(ADMIN_USER, ADMIN_PASS),
+    },
+    body: xar,
+  });
+  if (![200, 201].includes(put.status)) {
+    throw new Error(`Failed to upload roaster.xar: HTTP ${put.status}`);
+  }
+  await runXQuery(`
+    import module namespace repo="http://exist-db.org/xquery/repo";
+    repo:install-and-deploy-from-db("${dbPath}")
+  `);
+  log('installed roaster 1.13.0 (upgrading the stock version)');
+}
+
 const CONTENT_TYPES = {
   '.json': 'application/json',
   '.xql': 'application/xquery',
@@ -291,6 +316,37 @@ async function createApp() {
   log(`created app "${APP_ABBREV}"`);
 }
 
+// Jinks-server-side gap (confirmed on existdb/teipublisher:10.0.0, independent of app
+// config/extends order or which profiles are included - reproduced with jinntap removed
+// entirely and with "annotate" moved first in `extends`): a profile's own
+// `resources/odd/<name>.odd` is NOT copied verbatim by the generic per-profile file copy
+// when that same name is also declared in the profile's `config.json` "odds" list. Instead,
+// base10's own post-generation hook (`teip:custom-odd-install` in its `setup.xql`) treats any
+// declared-but-not-yet-present ODD as "needs a blank starter" and unconditionally stamps an
+// empty `<schemaSpec .../>` over it - discarding every one of annotate's `annotations.odd`
+// elementSpecs (the cssClass="annotation ... authority" rules pb-view-annotate.js depends on
+// to make entity mentions clickable at all). Confirmed via a real `jinks create`: the
+// Jinks-registered profile copy (`/db/apps/jinks/profiles/annotate/...`) is byte-identical to
+// this repo's source throughout - only the generated app's own copy ends up blank. Restore it
+// explicitly, the same "Jinks doesn't reliably propagate this on its own" pattern already used
+// for tei-publisher-lib/roaster above.
+async function restoreAnnotationsOdd() {
+  const localPath = '/opt/profiles/annotate/resources/odd/annotations.odd';
+  const body = await readFile(localPath);
+  const res = await fetch(`${BASE}/exist/rest/db/apps/${APP_ABBREV}/resources/odd/annotations.odd`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/xml',
+      Authorization: basicAuthHeader(APP_USER, APP_PASS),
+    },
+    body,
+  });
+  if (![200, 201].includes(res.status)) {
+    throw new Error(`Failed to restore annotations.odd: HTTP ${res.status}`);
+  }
+  log('restored annotate\'s annotations.odd (base10 stubs it blank on app creation)');
+}
+
 // Applied on every boot, not just first boot, so restarting the container with a different
 // $PB_COMPONENTS_SOURCE takes effect without a full re-init.
 //
@@ -352,6 +408,7 @@ async function main() {
     // features.forms.enabled flag that otherwise silently disables fore.js/fore.css loading.
     await deployProfileTree('/opt/profiles/forms', 'forms');
     await createApp();
+    await restoreAnnotationsOdd();
   } else {
     log(`"${APP_ABBREV}" already exists - skipping first-boot setup.`);
   }
@@ -361,6 +418,7 @@ async function main() {
   // package upgrade alone does not retroactively fix already-compiled transform/*.xql files -
   // recompiling ODDs every boot is what actually makes an upgrade take effect.
   await installTeiPublisherLib();
+  await installRoaster();
   // /api/odd is gated by x-constraints (roaster's auth.xql: authenticated-but-not-yet-
   // authorized reads as a plain 401 "Access denied", same shape as a bad password) checked
   // against the app-user's group membership - immediately after `jinks create` returns, that
