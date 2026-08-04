@@ -1,8 +1,10 @@
 # Reconciliation demo image
 
-A self-contained image with the `reconcile` profile, the patched `annotate` profile[^1], and a
-self-hostable `tei-publisher-components` build all baked in. `docker run` (or `podman run`) and
-it's up — no manual profile upload or `jinks create` steps.
+A self-contained image with the `reconcile` profile, the patched `annotate` profile[^1], a
+self-hostable `tei-publisher-components` build, and patched `tei-publisher-lib` (`6.1.1`) and
+`roaster` (`1.13.0`) packages all baked in. `docker run` (or `podman run`) and it's up — no manual
+profile upload or `jinks create` steps. Currently published as
+`ghcr.io/mpilhlt/tei-publisher-reconcile/tp-reconc-demo:0.1.2` (and `:latest`).
 
 [^1]: In the context of the reconciliation project, the `annotate` profile included with
 `tei-publisher-jinks` was updated to integrate mapping of multiple authority db fields to
@@ -209,12 +211,34 @@ base `existdb/teipublisher` image kept) — surfaced four more real bugs, all no
   `features.forms.enabled: true` and is now deployed by `entrypoint.js` (same pattern as
   `annotate`/`reconcile`), *and* `docker/app-config.json`'s `extends` list now lists `forms`
   directly, not just via `annotate`.
+- **Entity mentions in the annotate view aren't clickable at all** (no `.annotation`/
+  `.annotation-authority` styling or click handlers anywhere on the page, even though the raw TEI
+  markup and manifest look fine). Root cause: `base10`'s own app-generation hook
+  (`teip:custom-odd-install` in its `setup.xql`) unconditionally stamps a **blank** starter ODD
+  over any profile-declared-but-not-yet-present `resources/odd/<name>.odd` on `jinks create` —
+  independent of `extends` order or whether `jinntap` is included — discarding every
+  `cssClass="annotation ... authority"` rule in `annotate`'s `annotations.odd` before the app is
+  even usable once. The Jinks-registered profile copy stays correct throughout; only the
+  generated app's own copy is affected. Fixed the same way as the `tei-publisher-lib`/roaster
+  fixes below: `entrypoint.js`'s `restoreAnnotationsOdd()` re-PUTs the real file right after
+  `createApp()`, before the ODD recompile step.
+- **`GET /api/reconcile/v0.2` (or any path merely *starting with* a declared route) wrongly
+  matches that route** instead of 404ing — `router:create-regex` in the bundled `roaster` package
+  built path-matching regexes anchored only at the start, never the end (upstream issue
+  eeditiones/roaster#122). This project's `tei-publisher-roaster` checkout already carries the fix
+  (bumped to `1.13.0`), but — same class of bug as the `tei-publisher-lib` one above — the image
+  never actually baked it in. Fixed identically: a `roaster-builder` Dockerfile stage plus
+  `entrypoint.js`'s `installRoaster()`, called right after `installTeiPublisherLib()`.
 
 All were re-verified together against a fully fresh `podman build` + `podman run` (no reused
 layers beyond the base image, no persisted volume): i18n resources serve real translations, the
 annotate view has no `XQDY0025`, the ODD recompile succeeds, a Playwright check confirms `fx-fore`
-upgrades correctly with none of the raw-markup strings visible in the rendered page, and a
-screenshot of the annotation toolbar shows real icons instead of blank buttons.
+upgrades correctly with none of the raw-markup strings visible in the rendered page, a screenshot of
+the annotation toolbar shows real icons instead of blank buttons, `annotations.odd`'s `cssClass`
+rules survive app creation, and `GET /api/reconcile/v0.2` 404s instead of matching the manifest
+route. Full regression (25 XQSuite + 39 Cypress API + 6 Cypress GUI + `cors-check.sh` + a real Match
+round-trip against both the 0.2 and 1.0-draft local testbenches) is green against this image as of
+`0.1.2`.
 
 One more log line is expected and **not** a bug: `pb-login`'s own `_checkLogin` component
 (`tei-publisher-components/src/pb-login.js`) issues an unauthenticated status-check POST to
