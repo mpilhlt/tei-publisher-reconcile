@@ -6,10 +6,14 @@ integration for looking up and linking named entities (people, places, organizat
 against any reconciliation service — this one included — while annotating a TEI document.
 
 - **Server**: a new Jinks profile, [`reconcile/`](reconcile), implementing both the
-  **0.2** and **1.0-draft** versions of the spec from a single endpoint. It reconciles
-  against TEI Publisher's own person/place/organization/work authority registers, and
-  supports the optional `/preview`, `/suggest/*`, and data-extension (`/extend`) services on
-  top of the mandatory match/reconcile endpoint.
+  **0.2** and **1.0-draft** versions of the spec from a single endpoint. By default it
+  reconciles against TEI Publisher's own person/place/organization/work authority
+  registers, but that's just the shipped configuration — one file,
+  [`reconcile/modules/reconcile-config.xql`](reconcile/modules/reconcile-config.xql), lets
+  you swap in a custom entity-lookup function, scoring, and preview per type, so it's not
+  tied to those registers or even to TEI Publisher's own data model. It also supports the
+  optional `/preview`, `/suggest/*`, and data-extension (`/extend`) services on top of the
+  mandatory match/reconcile endpoint.
 - **Client**: an extension of TEI Publisher's `annotate` profile (patches on top of
   [eeditiones/jinks](https://github.com/eeditiones/jinks), see below) that wires a
   reconciliation-service connector into the entity-authority editor — click a `persName`/
