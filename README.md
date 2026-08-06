@@ -61,12 +61,23 @@ CDN switch for the web-component bundle), and how to build the image yourself.
 **As a reconciliation *server*, from OpenRefine:** in OpenRefine, open or create a project
 with a column of names (a mix of well-known ones and the demo's own — e.g. "Barth" — works
 well), then Column ▾ → **Reconcile → Start reconciling...** → **Add Standard Service...** →
-paste `http://localhost:8080/exist/apps/tp-reconc/api/reconcile`, pick a type, and
-**Start Reconciling**. Try disambiguating a same-named match by reconciling with a second
+paste `http://localhost:8080/exist/apps/tp-reconc/api/reconcile?version=0.2`, pick a type,
+and **Start Reconciling**. **Use the `?version=0.2` URL, not the bare one** — verified live
+against a real OpenRefine 3.10.0 instance: OpenRefine's own reconciliation-dialog and
+data-extension UI only wire up their live property-autocomplete (both "Also use relevant
+details from other columns" when reconciling, and the property picker in "Add columns from
+reconciled values") against the classic 0.2-shaped `suggest.property` manifest object
+(`service_url`/`service_path`); the plain endpoint's spec-compliant 1.0-draft manifest
+declares `suggest.property` as a bare `true`, which OpenRefine's client doesn't act on for
+either feature — the input silently does nothing (no dropdown, no request), the column
+can't actually be "mapped" to a property, and "Start reconciling" then refuses with "Column
+'X' is not mapped." The same gap is why the property search in "Add columns from reconciled
+values" falls back to OpenRefine's own hardcoded legacy default
+(`https://www.googleapis.com/freebase/v1/search`) instead of querying this server. Using
+`?version=0.2` for the *whole* workflow (not a second service added just for extend) fixes
+all of it in one go. Try disambiguating a same-named match by reconciling with a second
 column as a property condition, and pulling data back into the sheet with **Add columns
-from reconciled values...** (for this one, append `?version=0.2` to the service URL —
-OpenRefine's own client only understands the older manifest shape for data extension
-specifically, regardless of which spec version the server itself supports).
+from reconciled values...**.
 
 **As a reconciliation *client*, in the annotation editor:** open the app, navigate to a
 document, and use the annotate editor. Click an already-linked entity mention to see a
