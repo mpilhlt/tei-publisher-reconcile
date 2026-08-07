@@ -1,6 +1,6 @@
 # TEI Publisher Reconciliation
 
-An [OpenRefine Reconciliation Service API](https://reconciliation-api.github.io/specs/)
+A [Reconciliation Service API](https://reconciliation-api.github.io/specs/)
 implementation for [TEI Publisher](https://teipublisher.com/) v10, plus a matching client
 integration for looking up and linking named entities (people, places, organizations, works)
 against any reconciliation service — this one included — while annotating a TEI document.
@@ -9,16 +9,19 @@ against any reconciliation service — this one included — while annotating a 
   **0.2** and **1.0-draft** versions of the spec from a single endpoint. By default it
   reconciles against TEI Publisher's own person/place/organization/work authority
   registers, but that's just the shipped configuration — one file,
-  [`reconcile/modules/reconcile-config.xql`](reconcile/modules/reconcile-config.xql), lets
+  [`modules/reconcile-config.xql`](reconcile/modules/reconcile-config.xql), lets
   you swap in a custom entity-lookup function, scoring, and preview per type, so it's not
   tied to those registers or even to TEI Publisher's own data model. It also supports the
   optional `/preview`, `/suggest/*`, and data-extension (`/extend`) services on top of the
   mandatory match/reconcile endpoint.
-- **Client**: an extension of TEI Publisher's `annotate` profile (patches on top of
-  [eeditiones/jinks](https://github.com/eeditiones/jinks), see below) that wires a
+- **Client**: an (updated) extension of TEI Publisher's `annotate` profile that wires a
   reconciliation-service connector into the entity-authority editor — click a `persName`/
   `placeName`/`orgName`/`term`/`bibl` mention, search a reconciliation service by name, and
-  link the mention to the returned candidate.
+  link the mention to the returned candidate. This is configured mostly in the
+  `<pb-authority-lookup>` section of the `templates/pages/annotate-tei.html` and
+  `modules/annotations/tei-annotation-config.xqm` files coming with TEI Publisher's
+  `annotate` profile (cf. the regular
+  [TEI Publisher documentation](https://teipublisher.com/doc/annotations.xml)).
 - **Demo image**: a self-contained container with both baked in, so you can try the whole
   thing without setting up a TEI Publisher/Jinks development environment yourself — see
   below.
@@ -35,11 +38,12 @@ podman run -d --name tp-reconc-demo -p 8080:8080 \
 # or: docker run -d --name tp-reconc-demo -p 8080:8080 ghcr.io/mpilhlt/tei-publisher-reconcile/tp-reconc-demo:latest
 ```
 
-First boot takes 30–90 seconds longer than a normal restart — that's the container
+The first boot takes 30–90 seconds longer than a normal restart — that's the container
 generating the app and deploying the profiles. Watch it come up with:
 
 ```bash
 podman logs -f tp-reconc-demo
+# or: docker logs -f tp-reconc-demo
 ```
 
 Once you see `Ready:`, the app is at:
@@ -60,33 +64,40 @@ CDN switch for the web-component bundle), and how to build the image yourself.
 
 **As a reconciliation *server*, from OpenRefine:** in OpenRefine, open or create a project
 with a column of names (a mix of well-known ones and the demo's own — e.g. "Barth" — works
-well), then Column ▾ → **Reconcile → Start reconciling...** → **Add Standard Service...** →
-paste `http://localhost:8080/exist/apps/tp-reconc/api/reconcile?version=0.2`, pick a type,
-and **Start Reconciling**. **Use the `?version=0.2` URL, not the bare one** — verified live
-against a real OpenRefine 3.10.0 instance: OpenRefine's own reconciliation-dialog and
-data-extension UI only wire up their live property-autocomplete (both "Also use relevant
-details from other columns" when reconciling, and the property picker in "Add columns from
-reconciled values") against the classic 0.2-shaped `suggest.property` manifest object
-(`service_url`/`service_path`); the plain endpoint's spec-compliant 1.0-draft manifest
-declares `suggest.property` as a bare `true`, which OpenRefine's client doesn't act on for
-either feature — the input silently does nothing (no dropdown, no request), the column
-can't actually be "mapped" to a property, and "Start reconciling" then refuses with "Column
-'X' is not mapped." The same gap is why the property search in "Add columns from reconciled
-values" falls back to OpenRefine's own hardcoded legacy default
-(`https://www.googleapis.com/freebase/v1/search`) instead of querying this server. Using
-`?version=0.2` for the *whole* workflow (not a second service added just for extend) fixes
-all of it in one go. Try disambiguating a same-named match by reconciling with a second
-column as a property condition, and pulling data back into the sheet with **Add columns
-from reconciled values...**.
+well), then ***\<Name column\>* ▾** → **Reconcile** → **Start reconciling...** → **Add
+Standard Service...** → paste
+`http://localhost:8080/exist/apps/tp-reconc/api/reconcile?version=0.2`, pick a type, and
+**Start Reconciling**.
 
-**As a reconciliation *client*, in the annotation editor:** open the app, navigate to a
-document, and use the annotate editor. Click an already-linked entity mention to see a
-live preview (biography, dates, ...) rendered from its linked authority record, not just a
-bare id. Select an untagged mention, tag it as a person/place/organization/etc., and open
-the search panel (pencil icon) — results are federated from more than one source at once
-(the app's own local register alongside external authorities like GND), badged by origin.
-Picking a candidate links the mention and writes a real external identifier into the
-markup.
+> ***Note** that OpenRefine currently (at v3.10.0) has better support for the 0.2 version of
+the Reconciliation API protocol, so use the `?version=0.2` query parameter* (without it,
+TEI Publisher serves v.10-draft responses).
+
+If you have other columns in your OpenRefine project that might help disambiguate entities
+(e.g. gender, profession etc.), you can specify them in "Also use relevant details from other
+columns" when reconciling (but the demo app does not happen to have ambiguous entries where
+this would be needed). When you are happy with the reconciled entities, try adding TEI
+Publisher entity URLs or identifiers as new columns in OpenRefine with
+***\<Name column\>* ▾** → **Reconcile** → **Add column with URLs of matched entities...**,
+or **Add entity identifiers column...**.
+You can add even more data served by TEI Publisher with ***\<Name column\>* ▾** → **Edit column** →
+**Add columns from reconciled values...**, which will open a property picker dialogue
+
+**As a reconciliation *client*, in TEI Publisher's annotation editor:** open the demo app at
+<http://localhost:8080/exist/apps/tp-reconc>, navigate to a document, and use the annotate
+editor. Click an already-linked entity mention to see a live preview (biography, dates, ...)
+rendered from its linked authority record, not just a bare id. Select an untagged mention,
+and push the person button to tag it as an entity (*person* being the only type of entity
+that has a `ReconciliationService` authority db connector configured in the demo app). In the
+"Search/edit reference" panel that appears, matching entries from both local register and
+gnd persons will be combined. If a direct match in the register is found, it takes precedence
+over reconciliation lookups (the `local` badge on the right), but you can modify the string
+that is being searched for and when only a reconciliation query returns a result (because it
+can do fuzzy matching), the reconciliation interface to the local register kicks in: The badge
+changes to `Reconciliation` and the entry will be a hyperlink to the entity's view - which in
+this case happens to be provided by the app itself. Picking a candidate (with the "chain links
+button") tags the selected string and writes the entities identifier and, depending on the
+configuration, additional properties/attributes into the markup.
 
 **Against the spec itself:** point the official
 [reconciliation-api test bench](https://reconciliation-api.github.io/testbench/1.0/) (or a
@@ -117,12 +128,11 @@ podman push ghcr.io/mpilhlt/tei-publisher-reconcile/tp-reconc-demo:<version>
 ## Forked & patched dependencies
 
 This project's client side, and a few of TEI Publisher v10's own building blocks, needed
-real fixes and new features (see each fork's commit history for details). None of these
-forks are vendored into this repository — see `.gitignore` — they're cloned locally as
-siblings of this repo for development; see `AGENTS.md`'s "References" section for exact
-paths. **Once things have settled, the intent is to submit pull requests upstream** for
-each fork's real changes (not the ones below with no changes yet, kept only for pinning/
-reference).
+real fixes and new features (see each fork's commit history for details, they are listed
+below). None of these forks are vendored into this repository — see `.gitignore` — they're
+cloned locally as siblings of this repo for development; see `AGENTS.md`'s "References"
+section for exact paths. **Once things have settled, the intent is to submit pull requests
+upstream** for each fork's changes.
 
 **Note:** each fork's link below points at its `feature/reconcile` branch specifically,
 *not* the fork's default branch — every fork's default branch on GitHub still just
