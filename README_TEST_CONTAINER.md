@@ -49,6 +49,7 @@ skills/teipublisher-reconciliation-testing/scripts/up.sh
 ```
 
 What it does (`up.sh` → `wait-ready.sh`):
+
 - If a container named `teipub` already exists (stopped or crashed), **starts it** (`podman start
   teipub`) — this is the common case, since the container is normally left around between sessions.
 - Otherwise creates a fresh one: `podman run -d --name teipub -p 8080:8080 -v exist-data:/exist/data
@@ -66,6 +67,7 @@ must be the fully-qualified `docker.io/existdb/teipublisher:10.0.0` — `up.sh` 
 that; if you invoke podman directly instead, use the fully-qualified name or it'll fail to resolve.
 
 When it's done you should see:
+
 ```
 Ready (HTTP 200).
 Jinks:  http://localhost:8080/exist/apps/jinks
