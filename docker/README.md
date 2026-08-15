@@ -143,7 +143,14 @@ base `existdb/teipublisher` image kept) — surfaced four more real bugs, all no
   from the reliably-present `$context?doc?content` node instead:
   `config:document-type($context?doc?content/*)`.
 - **`err:XQDY0025: element has more than one attribute 'data-tei'`** crashing the annotate view.
-  This project's `tei-publisher-lib` checkout already carries the fix (bumped to `6.1.1`, see the
+  Concretely, any request that loads a document through `annotate`'s track-ids mode — e.g.
+  `GET /api/document/{id}?user.track-ids=yes`, which `annotate-tei.html`'s
+  `<pb-param name="track-ids" value="yes">` triggers on every page load, so any `cy.visit()` of an
+  annotate URL in `reconcile/test/cypress/e2e/gui/annotate-reconciliation.cy.js` (e.g.
+  `/sermons/27004.xml?template=annotate-tei.html&odd=annotations&view=single`) reproduces it —
+  500s on an unpatched `tei-publisher-lib`, because `model:map()` unconditionally re-added a
+  `data-tei` tracking attribute even onto nodes that already carried one. This project's
+  `tei-publisher-lib` checkout already carries the fix (bumped to `6.1.1`, see the
   `tei_publisher_lib_data_tei_fix` project memory) but the image never baked it in — only the dev
   container had it manually installed, which a full cache wipe erases. First attempt: a
   `lib-builder` Dockerfile stage building the `.xar` and dropping it into `/exist/autodeploy/`,

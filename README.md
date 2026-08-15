@@ -151,6 +151,32 @@ mirrors its upstream's `main`/`master` unmodified, so browsing to the bare repo 
 | [tei-publisher-jinks-templates](https://github.com/mpilhlt/tei-publisher-jinks-templates/tree/feature/reconcile) (jinks-templates) | [eeditiones/jinks-templates](https://github.com/eeditiones/jinks-templates) | `feature/reconcile` | Unmodified — reference only. |
 | [reconc-specs](https://github.com/mpilhlt/reconc-specs) | [reconciliation-api/specs](https://github.com/reconciliation-api/specs) | `master` (the fork's default branch) | Unmodified — JSON Schemas and examples used for conformance testing. |
 
+**What breaks without the `tei-publisher-lib`/`roaster` fixes** — the two forks above with the
+smallest, most surgical diffs from upstream. Both fixes are also documented as code comments at
+the exact line changed, not just here and in commit messages:
+
+- `tei-publisher-lib`, `content/model.xql`, `model:map()`: without the guard added in
+  [`35cb740`](https://github.com/mpilhlt/tei-publisher-lib/commit/35cb740) (comment added in
+  [`cd2379c`](https://github.com/mpilhlt/tei-publisher-lib/commit/cd2379c)), any request that
+  renders a document through `annotate`'s track-ids mode — e.g.
+  `GET /api/document/{id}?user.track-ids=yes`, which `annotate-tei.html`'s
+  `<pb-param name="track-ids" value="yes">` sends on every page load — throws
+  `err:XQDY0025: element has more than one attribute 'data-tei'` and the annotate view 500s.
+  Reproduced by `cy.visit()`ing any annotate URL in
+  [`reconcile/test/cypress/e2e/gui/annotate-reconciliation.cy.js`](reconcile/test/cypress/e2e/gui/annotate-reconciliation.cy.js)
+  (e.g. `/sermons/27004.xml?template=annotate-tei.html&odd=annotations&view=single`).
+- `tei-publisher-roaster`, `content/router.xql`, `router:create-regex()`: without the end-anchor
+  added in [`03c0b31`](https://github.com/mpilhlt/tei-publisher-roaster/commit/03c0b31) and the
+  trailing-slash tolerance added in
+  [`4d6bf1e`](https://github.com/mpilhlt/tei-publisher-roaster/commit/4d6bf1e) (comment added in
+  [`426d580`](https://github.com/mpilhlt/tei-publisher-roaster/commit/426d580)), any request path
+  that merely *starts with* a declared route wrongly matches that route instead of 404ing — e.g.
+  `GET /api/reconcile/v0.2` (a nonexistent path — not the `?version=0.2` query param the manifest
+  actually uses) wrongly returns the bare `/api/reconcile` route's manifest instead of a 404.
+  Covered by the container regression run in
+  [`docker/README.md`](docker/README.md#verified-end-to-end) ("`GET /api/reconcile/v0.2` 404s
+  instead of matching the manifest route"), not currently a standalone Cypress assertion.
+
 **Known gap, not yet fixed upstream:** `base10`'s own `setup.xql` (present unmodified in the
 `tei-publisher-jinks` fork, i.e. this bug is real in `eeditiones/jinks` too, not just the demo
 image's base) unconditionally overwrites any profile-declared `"odds"` entry with a **blank**
